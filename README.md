@@ -14,14 +14,12 @@ So a window will be opened for you to play and enjoy the game. It also have a tu
 # Files and Folders
 Don't delete or move any files in "Base_Sounds" and also the folder.                           
 You can add your musics in "music" folder and don't change name or move the folder.                           
-
 users.txt file is where you users main informations go in this format:                           
 {                           
 Username: Sample                           
 Email: Sample@sample.sample                           
 Password: Sample1234                           
 }                           
-
 So don't change or write anything it that.                           
 And also "users" folder is where each user game information stays on in this format:                           
 {                           
@@ -39,5 +37,4 @@ level: 0
 game: 0 (0 -> new game | 1 -> have a previouse game)                           
 (If there is a game it will be saved here)                           
 }                           
-
 So don't change or write anything in that.                           
