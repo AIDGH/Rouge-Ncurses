@@ -3,9 +3,9 @@ Rouge game with C, using ncurses library with terminal graphic!
 
 For running the game, you should be using Linux or WSL on Windows and you need to install ncurses and sdl2.
 # Install Commands:
-Ncurses install command: sudo apt-get install libncurses5-dev libncursesw5-dev
-SDL2 install command: sudo apt-get install libsdl2-dev
-SDL2_Mixer install command: sudo apt-get install libsdl2-mixer-dev
+Ncurses install command: sudo apt-get install libncurses5-dev libncursesw5-dev         
+SDL2 install command: sudo apt-get install libsdl2-dev         
+SDL2_Mixer install command: sudo apt-get install libsdl2-mixer-dev            
 
 And all of the running commands are written in Makefile so all you have to do is just write this command:
 make && ./exec
@@ -40,7 +40,7 @@ ancientkey: 0
 broken ancientkey: 0
 level: 0
 game: 0 (0 -> new game | 1 -> have a previouse game)
-(If therre is a game it will be saved here)
+(If there is a game it will be saved here)
 }
 
 So don't change or write anything in that.
