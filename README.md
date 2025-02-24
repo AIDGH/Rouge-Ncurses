@@ -1,20 +1,17 @@
 # Rouge-Ncurses
 Rouge game with C, using ncurses library with terminal graphic!                           
-
 For running the game, you should be using Linux or WSL on Windows and you need to install ncurses and sdl2.                           
-# Install Commands:                           
+# Install Commands                           
 Ncurses install command: sudo apt-get install libncurses5-dev libncursesw5-dev         
 SDL2 install command: sudo apt-get install libsdl2-dev         
 SDL2_Mixer install command: sudo apt-get install libsdl2-mixer-dev            
-
+# Run Commands
 And all of the running commands are written in Makefile so all you have to do is just write this command:                           
 make && ./exec                           
-
 Or you can run the run.bat file to compile and run all of the files with this command:                                                      
 ./run.bat                           
-
 So a window will be opened for you to play and enjoy the game. It also have a tutorial which will be written by Timmy (Cute creature on down and right side of the screen) while you play, I hope you enjoy it :D                           
-
+# Files and Folders
 Don't delete or move any files in "Base_Sounds" and also the folder.                           
 You can add your musics in "music" folder and don't change name or move the folder.                           
 
