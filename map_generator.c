@@ -52,7 +52,7 @@ void create_room(Room *room) {
     if(is_stair && rand() % 2){
         room->type = 'p';
     }
-    else if(rand() % (25 / (difficulty_efficiency / 2 + 3)) == 0 && room->stairCount < 1 && room->doorCount != 1){
+    else if(rand() % (25 / (difficulty_efficiency / 2 + 3)) == 0 && room->stairCount < 1 && room->doorCount != 1 && game->currentLevel != 0){
         room->type = 'm';
     }
     else if(aa == 0 && room->stairCount < 1 && room->doorCount != 1){
