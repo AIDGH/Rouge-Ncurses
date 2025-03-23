@@ -9771,9 +9771,9 @@ void start_game(){
         game->player->weapons[3].count = 0; game->player->weapons[3].type = 'a'; strcpy(game->player->weapons[3].name, "NormalArrow"); game->player->weapons[3].damage = 5;
         game->player->weapons[4].count = 0; game->player->weapons[4].type = 's'; strcpy(game->player->weapons[4].name, "Sword"); game->player->weapons[4].damage = 10;
         game->player->spells = (Spell *)malloc(3 * sizeof(Spell));
-        game->player->spells[0].count = 10; game->player->spells[0].type = 's'; strcpy(game->player->spells[0].name, "Speed");
-        game->player->spells[1].count = 10; game->player->spells[1].type = 'p'; strcpy(game->player->spells[1].name, "Power");
-        game->player->spells[2].count = 10; game->player->spells[2].type = 'h'; strcpy(game->player->spells[2].name, "Healing");
+        game->player->spells[0].count = 0; game->player->spells[0].type = 's'; strcpy(game->player->spells[0].name, "Speed");
+        game->player->spells[1].count = 0; game->player->spells[1].type = 'p'; strcpy(game->player->spells[1].name, "Power");
+        game->player->spells[2].count = 0; game->player->spells[2].type = 'h'; strcpy(game->player->spells[2].name, "Healing");
         game->player->specialfoods = (Food *)malloc(4 * sizeof(Food));
         game->player->specialfoods[0].count = 0; game->player->specialfoods[0].type = 'n';
         game->player->specialfoods[1].count = 0; game->player->specialfoods[1].type = 'p';
