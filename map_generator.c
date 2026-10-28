@@ -1,3 +1,4 @@
+#include "music.h"
 #include "map_generator.h"
 #include "game.h"
 #include <ncurses.h>
@@ -71,37 +72,26 @@ void create_room(Room *room) {
     // room->newWeaponsCount = 0;
 }
 void create_secret_door(Room *room, Room *rooms) {
-    int a = rand() % total_rooms - 1;
-    // a = total_rooms - 2;
-    int y1 = rooms[a].y + 1 + rand() % (rooms[a].height - 2);
-    int y2 = room->y + 1 + rand() % (room->height - 2);
-    if(mvwinch(stdscr, y1, rooms[a].x + rooms[a].width - 1) == '|'){
-        room->doors = malloc(2 * sizeof(Door));
-        room->doorCount = 1;
-        room->doors[0].cord.x = room->x;
-        room->doors[0].cord.y = y2;
-        rooms[a].doors[rooms[a].doorCount].type = 's';
-        rooms[a].doors[rooms[a].doorCount].password = 0;
-        rooms[a].doors[rooms[a].doorCount].password2 = 0;
-        rooms[a].doors[rooms[a].doorCount].cord.x = rooms[a].x + rooms[a].width - 1;
-        rooms[a].doors[rooms[a].doorCount].cord.y = y1;
-        rooms[a].doorCount++;
-        mvaddch(y1, rooms[a].x + rooms[a].width - 1, '?');
-        mvaddch(y2, room->x, '?');
-        game->levels[game->currentLevel]->secret_room = a;
-    }
-    else{
-        if(counter == 100){
-            counter = 0;
+    room->doors = calloc(1, sizeof(Door));
+    for (int attempt = 0; attempt < total_rooms - 1; ++attempt) {
+        int a = (total_rooms - 2 - attempt);
+        for (int y1 = rooms[a].y + 1; y1 < rooms[a].y + rooms[a].height - 1; ++y1) {
+            if (mvwinch(stdscr, y1, rooms[a].x + rooms[a].width - 1) != '|') continue;
+            int y2 = room->y + room->height / 2;
+            room->doorCount = 1;
+            room->doors[0] = (Door){.cord = {room->x, y2}, .type = 's'};
+            rooms[a].doors[rooms[a].doorCount++] = (Door){.cord = {rooms[a].x + rooms[a].width - 1, y1}, .type = 's'};
+            mvaddch(y1, rooms[a].x + rooms[a].width - 1, '?');
+            mvaddch(y2, room->x, '?');
+            game->levels[game->currentLevel]->secret_room = a;
             return;
         }
-        create_secret_door(room, rooms);
     }
 }
 void correct_room(Room *room) {
     int count = 0;
     int check1 = 0, check2 = 0, check3 = 0, check4 = 0;
-    room->doors = malloc(12 * sizeof(Door));
+    room->doors = calloc(2 * (room->width + room->height) + 4, sizeof(Door));
     for (int y = room->y; y < room->y + room->height; y++) {
         for (int x = room->x; x < room->x + room->width; x++) {
             if(y == room->y && (mvwinch(stdscr, y - 1, x) == '#' || mvwinch(stdscr, y - 2, x) == '#') && check1 != 2){
@@ -221,65 +211,15 @@ void correct_room(Room *room) {
     room->doorCount = count;
 }
 void draw_window(Room *room) {
-    int num_windows = rand() % 2;
-    if(game->currentLevel == 6){
-        num_windows = 1;
-    }
-    int side = 4, last_side = 4;
-    room->window.x = 0;
-    room->window.y = 0;
-    for (int i = 0; i < num_windows; i++) {
-        while(last_side == side){
-            side = rand() % 4;
-        }
-        last_side = side;
-        int position;
-        switch (side) {
-            case 0:
-                position = room->x + 1 + rand() % (room->width - 2);
-                if(mvwinch(stdscr, room->y, position) != '|' && 
-                mvwinch(stdscr, room->y, position) != '-' && 
-                mvwinch(stdscr, room->y, position) != '_'){
-                    draw_window(room);
-                }
-                mvaddch(room->y, position, '=');
-                room->window.x = position;
-                room->window.y = room->y;
-                break;
-            case 1:
-                position = room->x + 1 + rand() % (room->width - 2);
-                if(mvwinch(stdscr, room->y + room->height - 1, position) != '|' && 
-                mvwinch(stdscr, room->y + room->height - 1, position) != '-' && 
-                mvwinch(stdscr, room->y + room->height - 1, position) != '_'){
-                    draw_window(room);
-                }
-                mvaddch(room->y + room->height - 1, position, '=');
-                room->window.x = position;
-                room->window.y = room->y + room->height - 1;
-                break;
-            case 2:
-                position = room->y + 1 + rand() % (room->height - 2);
-                if(mvwinch(stdscr, position, room->x) != '|' && 
-                mvwinch(stdscr, position, room->x) != '-' && 
-                mvwinch(stdscr, position, room->x) != '_'){
-                    draw_window(room);
-                }
-                mvaddch(position, room->x, '=');
-                room->window.x = room->x;
-                room->window.y = position;
-                break;
-            case 3:
-                position = room->y + 1 + rand() % (room->height - 2);
-                if(mvwinch(stdscr, position, room->x + room->width - 1) != '|' && 
-                mvwinch(stdscr, position, room->x + room->width - 1) != '-' && 
-                mvwinch(stdscr, position, room->x + room->width - 1) != '_'){
-                    draw_window(room);
-                }
-                mvaddch(position, room->x + room->width - 1, '=');
-                room->window.x = room->x + room->width - 1;
-                room->window.y = position;
-                break;
-        }
+    room->window = (Point){0,0};
+    if (game->currentLevel != 6 && rand()%2 == 0) return;
+    for (int attempt=0;attempt<64;attempt++) {
+        int side=rand()%4, x, y;
+        if(side<2) { x=room->x+1+rand()%(room->width-2); y=room->y+(side?room->height-1:0); }
+        else { y=room->y+1+rand()%(room->height-2); x=room->x+(side==3?room->width-1:0); }
+        chtype wall=mvwinch(stdscr,y,x);
+        if(wall!='|' && wall!='-' && wall!='_') continue;
+        room->window=(Point){x,y};mvaddch(y,x,'=');return;
     }
 }
 void create_pillars(Room *room) {
@@ -509,6 +449,7 @@ void create_spell(Room *room) {
             room->spells[i].cord.x = x;
             room->spells[i].cord.y = y;
             room->spells[i].isUsed = false;
+            numbers++;
             int type = rand() % 3;
             if(type == 0){
                 room->spells[i].type = 's';
@@ -556,7 +497,7 @@ void create_weapon(Room *room) {
             room->weapons[i].cord.x = x;
             room->weapons[i].cord.y = y;
             room->weapons[i].isUsed = false;
-            int type = rand() % 6;
+            int type = rand() % 8;
             numbers++;
             // if(type == 0){
             //     room->weapons[i].type = 'm';
@@ -566,7 +507,7 @@ void create_weapon(Room *room) {
             //     mvaddch(y, x, '1');
             //     mvaddch(y, x + 1, '1');
             // }
-            if(type == 1 || type == 0){
+            if(type == 1 || type == 0 || type == 6){
                 room->weapons[i].type = 'd';
                 room->weapons[i].damage = 12;
                 room->weapons[i].range = 5;
@@ -593,7 +534,7 @@ void create_weapon(Room *room) {
                 mvaddch(y, x, '4');
                 mvaddch(y, x + 1, '4');
             }
-            else if(type == 5){
+            else if(type == 5 || type == 7){
                 room->weapons[i].type = 's';
                 room->weapons[i].damage = 10;
                 room->weapons[i].range = 1;
@@ -630,7 +571,7 @@ void draw_traps(Room *room) {
     }
     room->traps = malloc(num_objects * sizeof(Trap));
     room->trapCount = num_objects;
-    int numbers;
+    int numbers = 0;
     for (int i = 0; i < num_objects; i++) {
         int x = room->x + 1 + rand() % (room->width - 2);
         int y = room->y + 1 + rand() % (room->height - 2);
@@ -675,7 +616,7 @@ void draw_enemies(Room *room) {
     room->enemies = malloc((num_objects + 1) * sizeof(Enemy));
     room->enemyCount = num_objects;
     room->enemyLeft = num_objects;
-    int numbers;
+    int numbers = 0;
     for (int i = 0; i < num_objects; i++) {
         int x = room->x + 2 + rand() % (room->width - 4);
         int y = room->y + 2 + rand() % (room->height - 4);
@@ -852,132 +793,23 @@ void draw_player(Room *room) {
         draw_player(room);
     }
 }
+#include "map_routes.inc"
 void create_lock_key(Room *room){
-    int exist = 0;
-    for(int i = 0; i < room->doorCount; i++){
-        int invalid_check = 0;
-        int x2 = room->doors[i].cord.x;
-        int y2 = room->doors[i].cord.y;
-        for(int j = 0; j < room->doorCount; j++){
-            int x1 = room->doors[j].cord.x;
-            int y1 = room->doors[j].cord.y;
-            if((x1 == x2 && (y1 == y2 + 1 || y1 == y2 - 1)) || (y1 == y2 && (x1 == x2 + 1 || x1 == x2 - 1))){
-                invalid_check = 1;
-            }
-        }
-        if(invalid_check == 0){
-            if(game->currentLevel < 1){
-                room->doors[i].type = 'l';
-            }
-            else{
-                room->doors[i].type = 'h';
-                room->doors[i].password2 = rand() % 9999;
-            }
-            mvaddch(y2, x2, 'L');
-            room->lock_door = i;
-            room->doors[i].password = rand() % 9999;
-            room->doors[i].is_open = false;
-            exist = 1;
-            break;
-        }
-    }
-    if(exist && game->currentLevel != 6){
-        for(int i = 0; i < 1; i++){
-            int a = rand() % 4;
-            int x2, y2;
-            switch (a){
-                case 0:
-                    x2 = room->x + 1 + rand() % (room->width - 2);
-                    y2 = room->y + room->height - 2;
-                    if(mvwinch(stdscr, y2 + 1, x2) != '+' && mvwinch(stdscr, y2 + 1, x2) != 'L' && mvwinch(stdscr, y2 + 1, x2) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                        mvaddch(y2, x2, '&');
-                        room->password_generator.x = x2;
-                        room->password_generator.y = y2;
-                        i++;
-                    }
-                    break;
-                case 1:
-                    x2 = room->x + 1 + rand() % (room->width - 2);
-                    y2 = room->y + 1;
-                    if(mvwinch(stdscr, y2 - 1, x2) != '+' && mvwinch(stdscr, y2 - 1, x2) != 'L' && mvwinch(stdscr, y2 - 1, x2) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                        mvaddch(y2, x2, '&');
-                        room->password_generator.x = x2;
-                        room->password_generator.y = y2;
-                        i++;
-                    }
-                    break;
-                case 2:
-                    y2 = room->y + 1 + rand() % (room->height - 2);
-                    x2 = room->x + 1;
-                    if(mvwinch(stdscr, y2, x2 - 1) != '+' && mvwinch(stdscr, y2, x2 - 1) != 'L' && mvwinch(stdscr, y2, x2 - 1) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                        mvaddch(y2, x2, '&');
-                        room->password_generator.x = x2;
-                        room->password_generator.y = y2;
-                        i++;
-                    }
-                    break;
-                case 3:
-                    y2 = room->y + 1 + rand() % (room->height - 2);
-                    x2 = room->x + room->width - 2;
-                    if(mvwinch(stdscr, y2, x2 + 1) != '+' && mvwinch(stdscr, y2, x2 + 1) != 'L' && mvwinch(stdscr, y2, x2 + 1) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                        mvaddch(y2, x2, '&');
-                        room->password_generator.x = x2;
-                        room->password_generator.y = y2;
-                        i++;
-                    }
-                    break;
-            }
-            i--;
-        }
-        if(room->doors[room->lock_door].type == 'h'){
-            for(int i = 0; i < 1; i++){
-                int a = rand() % 4;
-                int x2, y2;
-                switch (a){
-                    case 0:
-                        x2 = room->x + 1 + rand() % (room->width - 2);
-                        y2 = room->y + room->height - 2;
-                        if(mvwinch(stdscr, y2 + 1, x2) != '+' && mvwinch(stdscr, y2 + 1, x2) != 'L' && mvwinch(stdscr, y2 + 1, x2) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                            mvaddch(y2, x2, '&');
-                            room->password_generator2.x = x2;
-                            room->password_generator2.y = y2;
-                            i++;
-                        }
-                        break;
-                    case 1:
-                        x2 = room->x + 1 + rand() % (room->width - 2);
-                        y2 = room->y + 1;
-                        if(mvwinch(stdscr, y2 - 1, x2) != '+' && mvwinch(stdscr, y2 - 1, x2) != 'L' && mvwinch(stdscr, y2 - 1, x2) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                            mvaddch(y2, x2, '&');
-                            room->password_generator2.x = x2;
-                            room->password_generator2.y = y2;
-                            i++;
-                        }
-                        break;
-                    case 2:
-                        y2 = room->y + 1 + rand() % (room->height - 2);
-                        x2 = room->x + 1;
-                        if(mvwinch(stdscr, y2, x2 - 1) != '+' && mvwinch(stdscr, y2, x2 - 1) != 'L' && mvwinch(stdscr, y2, x2 - 1) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                            mvaddch(y2, x2, '&');
-                            room->password_generator2.x = x2;
-                            room->password_generator2.y = y2;
-                            i++;
-                        }
-                        break;
-                    case 3:
-                        y2 = room->y + 1 + rand() % (room->height - 2);
-                        x2 = room->x + room->width - 2;
-                        if(mvwinch(stdscr, y2, x2 + 1) != '+' && mvwinch(stdscr, y2, x2 + 1) != 'L' && mvwinch(stdscr, y2, x2 + 1) != '=' && mvwinch(stdscr, y2, x2) == '.'){
-                            mvaddch(y2, x2, '&');
-                            room->password_generator2.x = x2;
-                            room->password_generator2.y = y2;
-                            i++;
-                        }
-                        break;
-                }
-                i--;
-            }
-        }
+    for(int i=0;i<room->doorCount;i++){
+        Door *d=&room->doors[i];Point in,out;
+        if(!door_sides(room,d,&in,&out))continue;
+        route_flood(game->player->cord,d->cord);
+        if(!route_seen[in.y][in.x]||route_seen[out.y][out.x])continue;
+        Point codes[2];int found=0,needed=game->currentLevel<1?1:2;
+        for(int y=room->y+1;y<room->y+room->height-1&&found<needed;y++)
+            for(int x=room->x+1;x<room->x+room->width-1&&found<needed;x++)
+                if(route_seen[y][x]&&(mvwinch(stdscr,y,x)&A_CHARTEXT)=='.')codes[found++]=(Point){x,y};
+        if(found!=needed)continue;
+        d->type=needed==1?'l':'h';d->is_open=false;d->password=1000+rand()%9000;
+        d->password2=needed==2?1000+rand()%9000:0;room->lock_door=i;
+        room->password_generator=codes[0];if(needed==2)room->password_generator2=codes[1];
+        for(int n=0;n<needed;n++)mvaddch(codes[n].y,codes[n].x,'&');
+        mvaddch(d->cord.y,d->cord.x,'L');return;
     }
 }
 int intersects(Room *rooms, int num_rooms, Room room, int total_rooms) {
@@ -1047,7 +879,7 @@ void connect_random_rooms(Room *rooms, int num_rooms, int room_checker[1000][2],
     int side1 = rand() % 4;
     int side2 = rand() % 4;
 
-    int x1, y1, x2, y2;
+    int x1=room1.x, y1=room1.y, x2=room2.x, y2=room2.y;
 
     switch (side1) {
         case 0:
@@ -1168,25 +1000,28 @@ void sleeping(){
     sleep(1);
 }
 void generate_map() {
+    for(int r=0;r<MAX_ROOMS;r++) release_room(game->levels[game->currentLevel]->rooms[r]);
+    is_secret = is_spell = is_nightmare = is_stair = counter = inter = 0;
     is_battle1 = 0;
     is_treasure = 0;
     is_healing = 0;
     is_spell = 0;
-    is_healing = 0;
+    is_reinforce = 0;
     clear();
     // Room rooms[10];
-    Room rooms1[12];
+
     Level level1;
     int num_rooms = 0;
     int room_checker[1000][2], t = 0;
     int map_width, map_height;
     int is_secret_room = 0;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING + 2;
     int start_y = BORDER_PADDING + 1;
     int end_x = map_width * 3 / 4 - BORDER_PADDING - 5;
     int end_y = map_height * 3 / 4 - BORDER_PADDING - 2;
-    srand(time(NULL));
     start_color();
     // init_pair(1, COLOR_YELLOW, COLOR_BLACK);
     // corridors = malloc(50 * sizeof(Corridor *));
@@ -1212,7 +1047,7 @@ void generate_map() {
         // for(int i = 0; i < total_rooms; i++){
         //     game->levels[game->currentLevel]->rooms[i] = &rooms1[i];
         // }
-        Room room;
+        Room room = {0};
         room.width = ROOM_MIN_SIZE + 3 + rand() % (ROOM_MAX_SIZE - ROOM_MIN_SIZE + 1);
         room.height = ROOM_MIN_SIZE + 2 + rand() % (5);
         room.x = start_x + end_x - 30 - rand() % (25 - room.width - start_x);
@@ -1223,8 +1058,19 @@ void generate_map() {
         *game->levels[game->currentLevel]->rooms[total_rooms - 1] = room;
         game->levels[game->currentLevel]->rooms[total_rooms - 1]->index = total_rooms - 1;
         
+        int placement_attempts=0;
         while (num_rooms < total_rooms - 1) {
-            Room room;
+            if (++placement_attempts>30000) {
+                /* Small viewports may not fit eight separated rooms. Keep the valid rooms and exit. */
+                int previous_end=total_rooms-1;
+                *game->levels[game->currentLevel]->rooms[num_rooms]=*game->levels[game->currentLevel]->rooms[previous_end];
+                if(num_rooms!=previous_end) memset(game->levels[game->currentLevel]->rooms[previous_end],0,sizeof(Room));
+                total_rooms=num_rooms+1;
+                game->levels[game->currentLevel]->rooms[num_rooms]->index=num_rooms;
+                game->levels[game->currentLevel]->roomsCount=total_rooms+is_secret_room;
+                break;
+            }
+            Room room = {0};
             room.width = ROOM_MIN_SIZE + 3 + rand() % (ROOM_MAX_SIZE - ROOM_MIN_SIZE + 1);
             room.height = ROOM_MIN_SIZE + 2 + rand() % (ROOM_MAX_SIZE - ROOM_MIN_SIZE + 1);
 
@@ -1245,7 +1091,7 @@ void generate_map() {
             }
             counter++;
             if(counter >= 10000){
-                Room room;
+                Room room = {0};
                 room.width = ROOM_MIN_SIZE + 2 + rand() % (3);
                 room.height = ROOM_MIN_SIZE + 2 + rand() % (3);
 
@@ -1273,9 +1119,20 @@ void generate_map() {
         num_rooms++;
 
         int k = 0;
-        while(k < total_rooms * total_rooms * 2 || check_rooms_validate(room_checker, t, num_rooms)){
+        while(k < total_rooms * total_rooms * 2){
             connect_random_rooms(*game->levels[game->currentLevel]->rooms, num_rooms, room_checker, &t);
             k++;
+        }
+        /* Guarantee a connected route; random corridor attempts can all fail for an endpoint. */
+        for(int r=0;r<num_rooms-1;r++) {
+            Room *a=game->levels[game->currentLevel]->rooms[r], *b=game->levels[game->currentLevel]->rooms[r+1];
+            int x=a->x+a->width/2, y=a->y+a->height/2;
+            int tx=b->x+b->width/2, ty=b->y+b->height/2;
+            while(x!=tx || y!=ty) {
+                if(x!=tx)x+=x<tx?1:-1;else y+=y<ty?1:-1;
+                chtype c=mvwinch(stdscr,y,x);
+                if(c==' ' || c=='_' || c=='-' || c=='|')mvaddch(y,x,'#');
+            }
         }
         draw_stair_1(game->levels[game->currentLevel]->rooms[num_rooms - 1]);
         if(game->currentLevel > 0){
@@ -1329,6 +1186,8 @@ void generate_map() {
         for (int i = 0; i < num_rooms; i++) {
             correct_room(game->levels[game->currentLevel]->rooms[i]);
         }
+        ensure_connected_rooms(num_rooms);
+        prune_bypass_doors(num_rooms);
         for (int i = 0; i < num_rooms; i++) {
             if(rand() % 3 == 0){
                 create_lock_key(game->levels[game->currentLevel]->rooms[i]);
@@ -1336,7 +1195,7 @@ void generate_map() {
         }
         if(is_secret_room){
             total_rooms++;
-            Room room;
+            Room room = {0};
             room.index = total_rooms - 1;
             room.width = 8 + rand() % 6;
             room.height = 8 + rand() % 6;
@@ -1352,7 +1211,7 @@ void generate_map() {
             create_weapon(&room);
             create_special_food(&room);
             room.type = 's';
-            game->levels[game->currentLevel]->rooms[total_rooms - 1] = &room;
+            *game->levels[game->currentLevel]->rooms[total_rooms - 1] = room;
             game->levels[game->currentLevel]->roomsCount = total_rooms;
         }
         // for(int i = 0; i < total_rooms; i++){
@@ -1361,7 +1220,7 @@ void generate_map() {
     }
     else if(game->currentLevel == 6){
         is_battle1 = 1;
-        game->levels[game->currentLevel]->rooms[0] = &rooms1[0];
+        memset(game->levels[game->currentLevel]->rooms[0], 0, sizeof(Room));
         game->levels[game->currentLevel]->roomsCount = 1;
         game->levels[game->currentLevel]->rooms[0]->width = 12 + rand() % 10;
         game->levels[game->currentLevel]->rooms[0]->height = 10 + rand() % 5;
@@ -1393,11 +1252,11 @@ void generate_map() {
         is_treasure = 1;
         // game->levels[game->currentLevel] = malloc(sizeof(Level));
         // game->levels[game->currentLevel]->rooms = malloc(1 * sizeof(Room*));
-        game->levels[game->currentLevel]->rooms[0] = &rooms1[0];
+        memset(game->levels[game->currentLevel]->rooms[0], 0, sizeof(Room));
         game->levels[game->currentLevel]->roomsCount = 1;
         // game->levels[game->currentLevel]->rooms[0] = malloc(sizeof(Room));
-        game->levels[game->currentLevel]->rooms[0]->width = 80 + rand() % (11);
-        game->levels[game->currentLevel]->rooms[0]->height = 24;
+        game->levels[game->currentLevel]->rooms[0]->width = map_width - 72;
+        game->levels[game->currentLevel]->rooms[0]->height = map_height - 19;
         game->levels[game->currentLevel]->rooms[0]->x = start_x + 3;
         game->levels[game->currentLevel]->rooms[0]->y = start_y + 1;
         game->levels[game->currentLevel]->rooms[0]->stair.cord.x = -1;
@@ -1445,7 +1304,7 @@ void generate_map() {
     // }
     // mvprintw(0, 0, "Generated Map:");
     refresh();
-    // getch();
+    // music_getch(stdscr);
     clear();
     erase();
     refresh();

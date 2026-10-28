@@ -4,10 +4,13 @@
 #include <stdio.h>
 #include <locale.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_mixer.h>
 #include "menu.h"
+#include "ui_theme.h"
+#include "accounts.h"
 #include "outro.h"
 #include "music.h"
 #include "login.h"
@@ -59,6 +62,10 @@ int main() {
     curs_set(0);
     noecho();
     cbreak();
+    set_escdelay(25);
+    mkdir("users", 0700);
+    if(accounts_init()) account_restore_player();
+    ui_choose_visuals();
     while (1) {
         if (!strcmp(which_menu, "exit")) {
             clear();
@@ -69,20 +76,22 @@ int main() {
             clear();
             refresh();
             strcpy(which_menu, display_menu());
+        } else if (!strcmp(which_menu, "LOGOUT")) {
+            account_logout_player();
         } else if (!strcmp(which_menu, " MUSIC ") || !strcmp(which_menu, " Music ")) {
             clear();
             refresh();
-            selected_music = display_music_menu();
+            char *chosen_music = display_music_menu();
+            if (chosen_music) selected_music = chosen_music;
             strcpy(which_menu, " Settings ");
         } else if (!strcmp(which_menu, " SIGN UP ")) {
             clear();
             refresh();
-            user_input_screen();
-            strcpy(which_menu, "menu");
+            account_register_form();
         } else if (!strcmp(which_menu, " LOGIN ")) {
             clear();
             refresh();
-            login_screen();
+            account_login_form();
         } else if (!strcmp(which_menu, "Before game menu") || !strcmp(which_menu, " Before game menu ") || !strcmp(which_menu, " GAME MENU ")) {
             if(!strcmp(which_user, "guest")){
                 strcpy(which_menu, "Guest before game menu");
@@ -138,6 +147,7 @@ int main() {
             current_level = 0;
             unlocked_level = -1;
             start_game();
+            if (!game_session_ready) { strcpy(which_menu, "menu"); continue; }
             escape_check = 0;
             if(strcmp(game->player->name, "guest") && strcmp(which_user, "guest")){
                 if(game->player->can_be_saved == 0){
@@ -146,7 +156,6 @@ int main() {
                     current_user.have_game = 0;
                 }
                 else{
-                    save_just_user_info(game->player);
                     save_user_game(game);
                     load_user_info(game->player->name, &current_user);
                     current_user.have_game = 1;
@@ -159,6 +168,8 @@ int main() {
             strcpy(which_menu, "menu");
         }
     }
+    release_game();
+    accounts_close();
     endwin();
     return 0;
 }

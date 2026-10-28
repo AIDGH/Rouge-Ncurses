@@ -1,9 +1,13 @@
+#include "music.h"
+#include "ui_theme.h"
 #include <ncurses.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <locale.h>
+#include <wchar.h>
+int wcwidth(wchar_t);
 #include "change_character.h"
 
 extern wchar_t character;
@@ -20,6 +24,8 @@ char *character_choices[10][10] = {
     {"@", "✯", "✠", "☫", "☣", "☠"},
     {"◉", "⛒", "♨", "☺", "☻", "◕"},
     {"℗", "♾", "⚙", "⍟", "☮", "◎"},
+    {"♞", "♜", "♟", "◆", "●", "✦"},
+    {"✹", "✚", "♠", "▲", "■", "◈"},
 };
 wchar_t character_results[10][10] = {
     { L'\U0000265A', L'\U00002655', L'\U00002659', L'\U000026D0', L'\U00000D9E', L'\U000026C7'},
@@ -28,15 +34,37 @@ wchar_t character_results[10][10] = {
     {L'\U00000040', L'\U0000272F', L'\U00002720', L'\U0000262B', L'\U00002623', L'\U00002620'},
     {L'\U000025C9', L'\U000026D2', L'\U00002668', L'\U0000263A', L'\U0000263B', L'\U000025D5'},
     {L'\U00002117', L'\U0000267E', L'\U00002699', L'\U0000235F', L'\U0000262E', L'\U000025CE'},
+    {L'♞',L'♜',L'♟',L'◆',L'●',L'✦'},
+    {L'✹',L'✚',L'♠',L'▲',L'■',L'◈'},
 };
 
-int n_character_choices_vertical = 6;
+int n_character_choices_vertical = 8;
+static int player_highlight=1;
+#include "avatar_art.inc"
+static const char *avatar_names[8][6]={
+ {"King","Queen","Pawn","Traveller","Crewmate","Snowman"},
+ {"Atom","Sunburst","Blossom","Sun","Radiance","Hexstar"},
+ {"Sentinel","Guardian","Warden","Watcher","Hive","Knot"},
+ {"Adventurer","Star","Cross","Sigil","Plague","Skull"},
+ {"Eye","Shield","Ember","Smile","Shade","Moon"},
+ {"Record","Infinity","Gear","Navigator","Peace","Oracle"},
+ {"Knight","Rook","Soldier","Gem","Orb","Spark"},
+ {"Nova","Healer","Spade","Scout","Golem","Prism"}
+};
+
+void draw_player_avatar(WINDOW *win,int y,int x) {
+    attr_t attrs;short pair;wattr_get(win,&attrs,&pair,NULL);
+    if(player_highlight)wattron(win,A_BOLD|A_REVERSE);
+    mvwprintw(win,y,x,"%lc",wcwidth(character)==1?character:L'@');
+    wattr_set(win,attrs,pair,NULL);
+}
 int n_character_choices_horizontal = 6;
 
 void print_character_change(WINDOW *menu_win, int highlight_vertical, int highlight_horizontal) {
     int x, y, i;
     x = 5;
     y = 19;
+    werase(menu_win);
     box(menu_win, 0, 0);
     wattron(menu_win, COLOR_PAIR(25));
     wattron(menu_win, A_BLINK);
@@ -76,10 +104,10 @@ void print_character_change(WINDOW *menu_win, int highlight_vertical, int highli
     mvwprintw(menu_win, 28, x - 2, "|");
     mvwprintw(menu_win, 29, x - 2, "|");
     mvwprintw(menu_win, 30, x - 2, "|");
-    mvwprintw(menu_win, 30, 4, "         __   __   __   __   __ ");
-    mvwprintw(menu_win, 31, 2, " |________|--| |--| |--| |--| |--| ");
-    mvwprintw(menu_win, 32, 2, "          |--| |--| |--| |--| |--| ");
-    mvwprintw(menu_win, 33, 2, "          \\_/  \\_/  \\_/  \\_/  \\_/");
+    mvwprintw(menu_win, 34, 4, "         __   __   __   __   __ ");
+    mvwprintw(menu_win, 35, 2, " |________|--| |--| |--| |--| |--| ");
+    mvwprintw(menu_win, 36, 2, "          |--| |--| |--| |--| |--| ");
+    mvwprintw(menu_win, 37, 2, "          \\_/  \\_/  \\_/  \\_/  \\_/");
     x = 13;
     for (i = 0; i < n_character_choices_vertical; ++i) {
         for(int j = 0; j < n_character_choices_horizontal; ++j){
@@ -96,6 +124,22 @@ void print_character_change(WINDOW *menu_win, int highlight_vertical, int highli
         }
         y += 2;
     }
+    ui_menu_ornament(menu_win,15,34);
+    int row=highlight_vertical-1,col=highlight_horizontal-1;
+    wchar_t glyph=character_results[row][col];
+    mvwprintw(menu_win,38,3,"%-42s",avatar_names[row][col]);
+    wattron(menu_win,A_BOLD|COLOR_PAIR(25));
+    for(int y=0;y<6;y++)mvwaddstr(menu_win,39+y,4,avatar_large[row*6+col][y]);
+    wattroff(menu_win,A_BOLD|COLOR_PAIR(25));
+    mvwaddstr(menu_win,40,24,"ON THE MAP");
+    mvwaddstr(menu_win,42,24,"..#...   ...#..");
+    attr_t attrs;short pair;wattr_get(menu_win,&attrs,&pair,NULL);
+    if(player_highlight)wattron(menu_win,A_BOLD|A_REVERSE);
+    mvwprintw(menu_win,42,30,"%lc",wcwidth(glyph)==1?glyph:L'@');
+    wattr_set(menu_win,attrs,pair,NULL);
+    mvwprintw(menu_win,46,2,"H: highlight %s  Enter: equip  Esc: cancel",player_highlight?"ON ":"OFF");
+    if(wcwidth(glyph)!=1)mvwaddstr(menu_win,38,3,"Needs a single-cell font; select another icon.");
+    ui_connected_art(menu_win);
     wrefresh(menu_win);
 }
 
@@ -104,12 +148,16 @@ void character_change() {
     int highlight_vertical = 1;
     int highlight_horizontal = 1;
     int choice = 0;
+    int original_highlight=player_highlight;
     int c;
 
+    for(int r=0;r<8;r++)for(int c=0;c<6;c++)if(character_results[r][c]==character){
+        highlight_vertical=r+1;highlight_horizontal=c+1;
+    }
     int startx, starty, width, height;
-    height = 35;
+    height = 48;
     width = 50;
-    starty = (LINES - height) / 2 - 3;
+    starty = (LINES - height) / 2;
     startx = (COLS - width) / 2;
 
     start_color();
@@ -122,11 +170,12 @@ void character_change() {
     attroff(COLOR_PAIR(1));
 
     menu_win = newwin(height, width, starty, startx);
+    if(!menu_win)return;
     keypad(menu_win, TRUE);
     print_character_change(menu_win, highlight_vertical, highlight_horizontal);
     
     while (1) {
-        c = wgetch(menu_win);
+        c = music_getch(menu_win);
         switch (c) {
             case KEY_UP:
                 if (highlight_vertical == 1)
@@ -152,7 +201,12 @@ void character_change() {
                 else
                     ++highlight_horizontal;
                 break;
+            case 'h': case 'H': player_highlight=!player_highlight;break;
+            case 27:
+                player_highlight=original_highlight;delwin(menu_win);clear();refresh();return;
+            case KEY_ENTER:
             case 10:
+                if(wcwidth(character_results[highlight_vertical-1][highlight_horizontal-1])!=1)break;
                 choice = highlight_vertical;
                 character = character_results[highlight_vertical - 1][highlight_horizontal - 1];
                 break;
@@ -167,6 +221,7 @@ void character_change() {
     refresh();
     wclear(menu_win);
     werase(menu_win);
+    ui_connected_art(menu_win);
     wrefresh(menu_win);
     delwin(menu_win);
 }

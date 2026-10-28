@@ -1,4 +1,4 @@
-#ifndef DIFFICULTY_H_H
+#ifndef DIFFICULTY_H
 #define DIFFICULTY_H
 
 extern char which_menu[50];

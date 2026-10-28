@@ -1,3 +1,4 @@
+#include "music.h"
 #include "sign_up.h"
 #include "user.h"
 #include <stdio.h>
@@ -21,7 +22,7 @@ void get_input_sign_up(WINDOW *win, int y, int x, char *prompt, char *input, int
 
     int ch, i = 0;
     while (1) {
-        ch = wgetch(win);
+        ch = music_getch(win);
         if (ch == '\n' || ch == 27) {
             break;
         } else if (ch == KEY_BACKSPACE || ch == 127) {
@@ -68,7 +69,7 @@ void user_save_data() {
     FILE *file = fopen(filepath, "w");
     if (file == NULL) {
         mvprintw(1, 0, "Error creating user file.");
-        getch();
+        music_getch(stdscr);
         return;
     }
 
@@ -88,7 +89,7 @@ void user_save_data() {
     fclose(file);
 
     // mvprintw(1, 0, "User '%s' created successfully.", our_user);
-    // getch();
+    // music_getch(stdscr);
 }
 
 void save_user_info(const char *username, const char *email, const char *password) {
@@ -198,7 +199,7 @@ void user_input_screen() {
                     mvwprintw(win, 6 + i * 2, 2, "%s", choices[i]);
                     wattroff(win, A_REVERSE);
                 }
-                int choice = wgetch(win);
+                int choice = music_getch(win);
                 switch (choice) {
                     case KEY_UP:
                         if (highlight > 0) {
@@ -252,6 +253,6 @@ void user_input_screen() {
     }
 
     wrefresh(win);
-    getch();    
+    music_getch(stdscr);
     delwin(win); 
 }

@@ -1,3 +1,5 @@
+#include "music.h"
+#include "ui_theme.h"
 #include <ncurses.h>
 #include <string.h>
 #include "color_change.h"
@@ -97,6 +99,7 @@ void print_colors(WINDOW *menu_win, int highlight) {
         }
         y += 2;
     }
+    ui_connected_art(menu_win);
     wrefresh(menu_win);
 }
 
@@ -121,7 +124,7 @@ void color_change() {
     print_colors(menu_win, highlight);
     
     while (1) {
-        c = wgetch(menu_win);
+        c = music_getch(menu_win);
         switch (c) {
             case KEY_UP:
                 if (highlight == 1)
@@ -149,6 +152,6 @@ void color_change() {
     strcpy(which_color, color_choices[choice - 1]);
     clrtoeol();
     refresh();
-    // getch();
+    // music_getch(stdscr);
     delwin(menu_win);
 }

@@ -1,3 +1,4 @@
+#include "music.h"
 #include "login.h"
 #include "user.h"
 #include <stdio.h>
@@ -19,7 +20,7 @@ void get_input_login(WINDOW *win, int y, int x, char *prompt, char *input, int l
 
     int ch, i = 0;
     while (1) {
-        ch = wgetch(win);
+        ch = music_getch(win);
         if (ch == '\n' || ch == 27) {
             if (ch == 27) {
                 input[0] = '\0';
@@ -48,7 +49,7 @@ void get_password_login(WINDOW *win, int y, int x, char *prompt, char *input, in
 
     int ch, i = 0;
     while (1) {
-        ch = wgetch(win);
+        ch = music_getch(win);
         if (ch == '\n' || ch == 27) {
             if (ch == 27) {
                 input[0] = '\0';
@@ -182,7 +183,7 @@ void login_screen() {
             mvwprintw(win, 4 + i * 2, 2, "%s", choices[i]);
             wattroff(win, A_REVERSE);
         }
-        int choice = wgetch(win);
+        int choice = music_getch(win);
         switch (choice) {
             case KEY_UP:
                 if (highlight > 0) {
@@ -237,11 +238,11 @@ login:
             mvwprintw(win, 12, 2, "Press 'f' for password hint.           ");
             wrefresh(win);
 
-            int ch = wgetch(win);
+            int ch = music_getch(win);
             if (ch == 'f' || ch == 'F') {
                 show_password_hint(win, username);
                 wrefresh(win);
-                wgetch(win);
+                music_getch(win);
             }
             continue;
         }
@@ -267,6 +268,6 @@ login:
 
 end:
     wrefresh(win);
-    getch();
+    music_getch(stdscr);
     delwin(win);
 }

@@ -1,3 +1,4 @@
+#include "music.h"
 #include <ncurses.h>
 #include <string.h>
 #include "difficulty.h"
@@ -71,7 +72,7 @@ void difficulty_change() {
     print_difficulty_change(menu_win, highlight);
     
     while (1) {
-        c = wgetch(menu_win);
+        c = music_getch(menu_win);
         switch (c) {
             case KEY_UP:
                 if (highlight == 1)
@@ -111,6 +112,6 @@ void difficulty_change() {
     }
     clrtoeol();
     refresh();
-    // getch();
+    // music_getch(stdscr);
     delwin(menu_win);
 }

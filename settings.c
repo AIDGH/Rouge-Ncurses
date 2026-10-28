@@ -1,3 +1,5 @@
+#include "music.h"
+#include "ui_theme.h"
 #include <ncurses.h>
 #include <string.h>
 #include "settings.h"
@@ -22,6 +24,7 @@ void print_setting_menu(WINDOW *menu_win, int highlight) {
     box(menu_win, 0, 0);
     wattron(menu_win, COLOR_PAIR(14));
     wattron(menu_win, A_BLINK);
+    if(ui_old_visuals){
     mvwprintw(menu_win, 0, 0,  "                     __/\\_/\\__                     ");
     mvwprintw(menu_win, 1, 0,  "                    /\\       /\\                    ");
     mvwprintw(menu_win, 2, 0,  "                   /  \\_____/  \\                   ");
@@ -33,6 +36,7 @@ void print_setting_menu(WINDOW *menu_win, int highlight) {
     mvwprintw(menu_win, 8, 0,  "                    \\_/\\_&_/\\_/                    ");
     mvwprintw(menu_win, 9, 0,  " ");
     mvwprintw(menu_win, 9, 49,  " ");
+    }else{ui_settings_emblem(menu_win);}
     wattroff(menu_win, A_BLINK);
     wattroff(menu_win, COLOR_PAIR(14));
     mvwprintw(menu_win, 10, 0, "┌────────────────────[Setting]───────────────────┐");
@@ -65,6 +69,8 @@ void print_setting_menu(WINDOW *menu_win, int highlight) {
         }
         y += 2;
     }
+    ui_menu_ornament(menu_win,11,26);
+    ui_connected_art(menu_win);
     wrefresh(menu_win);
 }
 
@@ -94,7 +100,7 @@ void setting_menu() {
     print_setting_menu(menu_win, highlight);
     
     while (1) {
-        c = wgetch(menu_win);
+        c = music_getch(menu_win);
         switch (c) {
             case KEY_UP:
                 if (highlight == 1)
@@ -122,7 +128,7 @@ void setting_menu() {
     strcpy(which_menu, setting_choices[choice - 1]);
     clrtoeol();
     refresh();
-    // getch();
+    // music_getch(stdscr);
     delwin(menu_win);
 }
 

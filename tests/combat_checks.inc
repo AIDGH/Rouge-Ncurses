@@ -1,0 +1,61 @@
+extern int player_step_valid(int,int);
+extern int ranged_key_vector(int,int*,int*);
+extern void after_move(WINDOW *);
+extern MEVENT mouse_event;
+extern int run_finished,move_or_not;
+extern void win_game_screen(time_t);
+static void check_combat_controls(WINDOW *win,Room *room){
+    int dx,dy;assert(ranged_key_vector(KEY_PPAGE,&dx,&dy)&&dx==1&&dy==-1);
+    assert(ranged_key_vector('z',&dx,&dy)&&dx==-1&&dy==1);
+    assert(!ranged_key_vector(27,&dx,&dy));
+    Player *p=game->player;Point origin={room->x+2,room->y+2};p->cord=origin;room->type='n';room->enemyCount=0;
+    for(int y=room->y+1;y<room->y+room->height-1;y++)for(int x=room->x+1;x<room->x+room->width-1;x++)game->whole_map[0][y][x].item='.';
+    p->Power_effect=0;
+    p->currentWeapon=(Weapon){.type='w',.count=3,.damage=15,.range=10,.name="MagicWand"};p->weapons[2]=p->currentWeapon;
+    int drops=room->weaponCount;
+    int landing=origin.x+10;if(landing>room->x+room->width-2)landing=room->x+room->width-2;
+    move_click=' ';ungetch('d');attacking(win);
+    assert(p->currentWeapon.count==1&&p->weapons[2].count==1&&p->cord.x==landing&&p->cord.y==origin.y);
+    assert(room->weaponCount==drops+1&&room->weapons[drops].type=='w'&&room->weapons[drops].count==1);
+    assert(room->weapons[drops].cord.x==landing);
+    p->cord=origin;direction=KEY_RIGHT;move_click='e';attacking(win);
+    assert(p->currentWeapon.count==0&&p->weapons[2].count==0&&p->cord.x==origin.x&&p->cord.y==origin.y);
+    p->currentWeapon.count=p->weapons[2].count=1;direction='d';attacking(win);
+    assert(p->currentWeapon.count==1&&p->cord.x==origin.x&&!move_or_not);
+    p->currentWeapon.count=p->weapons[2].count=2;
+    move_click=' ';ungetch(27);attacking(win);assert(p->currentWeapon.count==2&&!move_or_not);
+    game->whole_map[0][origin.y][origin.x].item='#';move_click='e';direction=KEY_RIGHT;attacking(win);
+    assert(p->currentWeapon.count==2&&!move_or_not);game->whole_map[0][origin.y][origin.x].item='.';
+    game->currentLevel=6;attacking(win);assert(p->currentWeapon.count==2&&!move_or_not);game->currentLevel=0;
+    game->whole_map[0][origin.y][origin.x+1].item='|';move_click='e';direction='d';attacking(win);assert(p->currentWeapon.count==2);
+    assert(!player_step_valid(origin.y,origin.x+2));assert(!player_step_valid(origin.y+1,origin.x+1));
+    game->whole_map[0][origin.y][origin.x+1].item='.';
+    if(!room->enemies)room->enemies=calloc(2,sizeof(Enemy));
+    room->enemyCount=room->enemyLeft=1;room->enemies[0]=(Enemy){.cord={origin.x+2,origin.y+1},.health=100,.isAlive=true,.canMove=true,.type='d'};
+    game->whole_map[0][origin.y+1][origin.x+2].item='D';
+    mouse_event=(MEVENT){.x=origin.x+2,.y=origin.y+1,.bstate=BUTTON1_PRESSED};move_click=KEY_MOUSE;attacking(win);
+    assert(room->enemies[0].health==85&&!room->enemies[0].canMove&&p->currentWeapon.count==1);assert(p->cord.x==origin.x&&p->cord.y==origin.y);
+    game->whole_map[0][origin.y+1][origin.x+2].item='.';
+    room->enemies[0].cord=(Point){origin.x+3,origin.y};room->enemies[0].health=100;room->enemies[0].canMove=true;
+    game->whole_map[0][origin.y][origin.x+3].item='D';
+    for(int theme=0;theme<2;theme++){
+        ui_old_visuals=theme;p->cord=origin;p->currentWeapon.count=p->weapons[2].count=2;
+        room->enemies[0].health=100;room->enemies[0].canMove=true;
+        move_click=' ';ungetch('D');attacking(win);
+        assert(p->cord.x==origin.x+2&&p->cord.y==origin.y&&p->currentWeapon.count==0);
+        assert(room->enemies[0].health==85&&!room->enemies[0].canMove);
+    }
+    p->cord=origin;game->whole_map[0][origin.y][origin.x+3].item='.';room->enemyCount=room->enemyLeft=0;
+    p->currentWeapon.count=p->weapons[2].count=2;direction='d';move_click='e';
+    game->whole_map[0][origin.y][origin.x+2].item='|';attacking(win);
+    assert(p->cord.x==origin.x+1&&p->currentWeapon.count==0);
+    p->cord=origin;game->whole_map[0][origin.y][origin.x+2].item='.';
+
+    int floor=game->currentLevel;game->currentLevel=5;run_finished=1;is_last_room=0;
+    int enemy_count=game->levels[5]->rooms[0]->enemyCount;
+    ungetch(27);win_game_screen(time(NULL));assert(run_finished&&escape_check);
+    after_move(win);
+    assert(!is_last_room&&game->levels[5]->rooms[0]->enemyCount==enemy_count);
+    run_finished=escape_check=0;game->currentLevel=floor;
+    fprintf(stderr,"PASS two-step aim cancellation, blocked shots, wand ride (2), stationary arrows/mouse (1), recoverable wand, frozen enemy, ride stops before walls/enemies in both themes, corridor/battle restrictions, corner/lunge blocking and completed-run guard\n");
+}

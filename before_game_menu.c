@@ -1,3 +1,5 @@
+#include "music.h"
+#include "ui_theme.h"
 #include <ncurses.h>
 #include <string.h>
 #include "user.h"
@@ -96,6 +98,8 @@ void print_menu_before_game(WINDOW *menu_win, int highlight) {
         }
         y += 2;
     }
+    ui_menu_ornament(menu_win,1+a1,16+a1);
+    ui_connected_art(menu_win);
     wrefresh(menu_win);
 }
 
@@ -119,7 +123,7 @@ void before_game_menu() {
     
     while (1) {
         int a = 0;
-        c = wgetch(menu_win);
+        c = music_getch(menu_win);
         switch (c) {
             case KEY_UP:
                 a = 1;
@@ -154,6 +158,6 @@ void before_game_menu() {
     strcpy(which_menu, choices_before_game[choice - 1]);
     clrtoeol();
     refresh();
-    // getch();
+    // music_getch(stdscr);
     delwin(menu_win);
 }

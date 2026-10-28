@@ -1,0 +1,16 @@
+# Local builds, diagnostics and player data
+build-macos/
+build-linux/
+*.o
+*.dSYM/
+*.plist
+.DS_Store
+exec
+main.out
+users/
+tests/memory-checks
+
+.local-data/
+music/*.mp3
+music/*.flac
+music/*.wav

@@ -1,3 +1,4 @@
+#include "ui_theme.h"
 #include <ncurses.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -85,6 +86,8 @@ void print_pause_menu(WINDOW *menu_win, int highlight) {
         }
         y += 2;
     }
+    ui_menu_ornament(menu_win,1,18);
+    ui_connected_art(menu_win);
     wrefresh(menu_win);
 }
 
@@ -106,16 +109,19 @@ void pause_menu() {
             wattron(menu_win, COLOR_PAIR(20));
             mvwprintw(menu_win, height / 2, width / 2 - 5, "Loading.  ");
             wattroff(menu_win, COLOR_PAIR(20));
+            ui_connected_art(menu_win);
             wrefresh(menu_win);
             usleep(300000);
             wattron(menu_win, COLOR_PAIR(21));
             mvwprintw(menu_win,  height / 2, width / 2 - 5, "Loading.. ");
             wattroff(menu_win, COLOR_PAIR(21));
+            ui_connected_art(menu_win);
             wrefresh(menu_win);
             usleep(300000);
             wattron(menu_win, COLOR_PAIR(10));
             mvwprintw(menu_win,  height / 2, width / 2 - 5, "Loading...");
             wattroff(menu_win, COLOR_PAIR(10));
+            ui_connected_art(menu_win);
             wrefresh(menu_win);
             usleep(300000);
         }
@@ -126,7 +132,7 @@ void pause_menu() {
     
     while (1) {
         int a = 0;
-        c = wgetch(menu_win);
+        c = music_getch(menu_win);
         switch (c) {
             case KEY_UP:
                 a = 1;
@@ -164,16 +170,19 @@ void pause_menu() {
             wattron(menu_win, COLOR_PAIR(20));
             mvwprintw(menu_win, height / 2, width / 2 - 5, "Loading.  ");
             wattroff(menu_win, COLOR_PAIR(20));
+            ui_connected_art(menu_win);
             wrefresh(menu_win);
             usleep(300000);
             wattron(menu_win, COLOR_PAIR(21));
             mvwprintw(menu_win,  height / 2, width / 2 - 5, "Loading.. ");
             wattroff(menu_win, COLOR_PAIR(21));
+            ui_connected_art(menu_win);
             wrefresh(menu_win);
             usleep(300000);
             wattron(menu_win, COLOR_PAIR(10));
             mvwprintw(menu_win,  height / 2, width / 2 - 5, "Loading...");
             wattroff(menu_win, COLOR_PAIR(10));
+            ui_connected_art(menu_win);
             wrefresh(menu_win);
             usleep(300000);
         }
@@ -181,6 +190,6 @@ void pause_menu() {
     }
     clrtoeol();
     refresh();
-    // getch();
+    // music_getch(stdscr);
     delwin(menu_win);
 }

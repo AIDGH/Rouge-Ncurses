@@ -1,6 +1,15 @@
 #ifndef GAME_H
 #define GAME_H
 
+#include <stdbool.h>
+#include <ncurses.h>
+#define MAX_LEVELS 7
+#define MAX_ROOMS 9
+#define MAP_ROWS 100
+#define MAP_COLS 300
+#define MIN_ROWS 50
+#define MIN_COLS 160
+
 typedef struct
 {
     int x;
@@ -199,9 +208,19 @@ typedef struct
     int map_height;
     int map_width;
     bool new_game;
-    Map whole_map[6][100][300];
+    Map whole_map[MAX_LEVELS][MAP_ROWS][MAP_COLS];
 } Game;
 
+extern bool game_session_ready;
+void release_room(Room *room);
+void release_game(void);
+void boss_encounter_reset(void);
+void boss_encounter_begin(Enemy *enemy);
+void boss_encounter_tick(Enemy *enemy, WINDOW *win);
+void boss_encounter_draw(WINDOW *win, Room *room);
+void boss_encounter_stats(int *dodges,int *hits);
+void victory_results_reset(void);
+int victory_results_ready(void);
 void start_game();
 void game_play(WINDOW *game_win);
 void print_map(WINDOW *game_win);

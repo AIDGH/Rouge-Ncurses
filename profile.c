@@ -1,3 +1,5 @@
+#include "music.h"
+#include "ui_theme.h"
 #include <ncurses.h>
 #include <string.h>
 #include "user.h"
@@ -33,19 +35,14 @@ void display_profile() {
     mvwprintw(profile_win, 21, 4, "├────────────────────────────────────────┤");
     mvwprintw(profile_win, 22, 4, "│ Email: %-31s │", current_user.email);
 
-    char masked_password[50];
-    memset(masked_password, '*', strlen(current_user.password));
-    masked_password[strlen(current_user.password)] = '\0';
-
-    mvwprintw(profile_win, 23, 4, "│ Password: %-28s │", masked_password);
-    mvwprintw(profile_win, 24, 4, "│ Show Password          [ ]             │");
-    mvwprintw(profile_win, 25, 4, "│ Hide Password          [ ]             │");
+    mvwprintw(profile_win, 23, 4, "│ Password: %-28s │", "Stored securely");
+    mvwprintw(profile_win, 24, 4, "│ Login stays active on this computer.   │");
+    mvwprintw(profile_win, 25, 4, "│ Main menu: L logs out. Esc goes back.  │");
     mvwprintw(profile_win, 26, 4, "└────────────────────────────────────────┘");
 
     wattroff(profile_win, COLOR_PAIR(2));
     wrefresh(profile_win);
 
-    int choice = 0;
     keypad(profile_win, TRUE);
     while (true) {
         if (!strcmp(which_color, " Yellow ")) {
@@ -78,30 +75,13 @@ void display_profile() {
         } else if (!strcmp(which_color, " Green ")) {
             wattroff(profile_win, COLOR_PAIR(7));
         }
-        mvwprintw(profile_win, 24, 30, choice == 0 ? "X" : " ");
-        mvwprintw(profile_win, 25, 30, choice == 1 ? "X" : " ");
-        wrefresh(profile_win);
+            wrefresh(profile_win);
 
-        int ch = wgetch(profile_win);
-        switch (ch) {
-            case KEY_UP:
-                choice = (choice == 0) ? 1 : 0;
-                break;
-            case KEY_DOWN:
-                choice = (choice == 1) ? 0 : 1;
-                break;
-            case 10:
-                if (choice == 0) {
-                    mvwprintw(profile_win, 23, 16, "%-28s", current_user.password);
-                } else if (choice == 1) {
-                    mvwprintw(profile_win, 23, 16, "%-28s", masked_password);
-                }
-                wrefresh(profile_win);
-                break;
-            case 27:
-                delwin(profile_win);
-                endwin();
-                return;
+        int ch = music_getch(profile_win);
+        if (ch == 27 || ch == '\n' || ch == KEY_ENTER) {
+            delwin(profile_win);
+            clear(); refresh();
+            return;
         }
     }
 }

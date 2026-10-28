@@ -1,3 +1,4 @@
+#include "music.h"
 #include <ncurses.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +16,7 @@ void display_scoreboard() {
 
     if (num_users == 0) {
         mvprintw(0, 0, "No users found.");
-        getch();
+        music_getch(stdscr);
         return;
     }
 
@@ -154,7 +155,7 @@ void display_scoreboard() {
         mvwprintw(score_win, height - 2, 1, "Page %d/%d", page + 1, total_pages);
         mvwprintw(score_win, height - 2, width - 19, "Press esc for quit");
         wrefresh(score_win);
-        int ch = getch();
+        int ch = music_getch(stdscr);
         if (ch == KEY_RIGHT) {
             if (page < total_pages - 1) {
                 page++;

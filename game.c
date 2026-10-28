@@ -17,6 +17,21 @@
 #include "pause_menu.h"
 #include "change_character.h"
 #include "color_change.h"
+#include "ui_theme.h"
+static void legacy_draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number);
+static void legacy_draw_room(WINDOW *game_win, Room *room, int room_number);
+static void legacy_draw_last_room(WINDOW *game_win, Room *room, int room_number);
+static void legacy_draw_nightmare_room(WINDOW *game_win, Room *room, int room_number);
+static void legacy_draw_attacked_room(WINDOW *game_win, Room *room, int room_number);
+static void legacy_draw_ranged_attacked_room(WINDOW *game_win, Room *room, int room_number, int dx, int dy);
+static void legacy_print_map(WINDOW *game_win);
+static void legacy_print_all_map(WINDOW *game_win);
+static void legacy_guid(WINDOW *game_win);
+static void legacy_quoting(WINDOW *game_win);
+static void legacy_messaging(WINDOW *game_win);
+static int victory_results_closed(void);
+static void victory_results_start(int gold,int play_time);
+static void victory_results_screen(WINDOW *canvas,time_t began);
 
 // https://www.rapidtables.com/code/text/unicode-characters.html
 // Characters1: @ ♚ L'\U0000265A' ♕ L'\U00002655' ♙ L'\U00002659' ⛐ L'\U000026D0' ඞ L'\U00000D9E' ⛇ L'\U000026C7'
@@ -25,8 +40,8 @@
 // Characters4: ☠ L'\U00002620' ☣ L'\U00002623' ✯ L'\U0000272F' ✠ L'\U00002720' ☫ L'\U0000262B' ⚙ L'\U00002699'
 // Characters5: ◉ L'\U00002539' ⛒ L'\U000026D2' ㊝ L'\U0000329D' ☺ L'\U0000263A' ☻ L'\U0000263B' ◕ L'\U000025D5'
 // Characters6: ℗ L'\U00002117' ♾ L'\U0000267E' ☉ L'\U00002609 ⍟ L'\U0000235F' ☮ L'\U0000262E' ◎ L'\U000025CE'
-// Wall and Door and Windows: ╔ ╗ ╚ ╝ ═ ║   ╬   ╠ ╦ ╩ ╣ 
-// Trap and Stair: ⚺   ⛩
+// Wall and Door and Windows: ┌ ┐ └ ┘ ─ │   ┼   ├ ┬ ┴ ┤
+// Trap and Stair: ^   ≡
 // Corridors and Pillars: █ ▓
 extern wchar_t character;
 extern Mix_Music *music;
@@ -52,6 +67,26 @@ Mix_Music *loosing_effect;
 Mix_Music *winning_effect;
 Level *levels[6];
 Game *game;
+bool game_session_ready;
+
+void release_room(Room *r) {
+    free(r->doors); free(r->pillars); free(r->foods); free(r->shields);
+    free(r->specialfoods); free(r->golds); free(r->weapons); free(r->spells);
+    free(r->traps); free(r->enemies); free(r->newWeapons);
+    memset(r, 0, sizeof(*r));
+}
+void release_game(void) {
+    if (!game) return;
+    for (int i=0;i<MAX_LEVELS;i++) {
+        if (!game->levels[i]) continue;
+        for (int j=0;j<MAX_ROOMS;j++) release_room(game->levels[i]->rooms[j]);
+        free(game->levels[i]->rooms[0]); free(game->levels[i]->rooms); free(game->levels[i]);
+    }
+    free(game->levels); free(game->player->weapons); free(game->player->spells);
+    free(game->player->specialfoods); free(game->player); free(game); game=NULL;
+}
+
+// Map whole_map[6][200][200];
 Corridor *corridors[50];
 Player *player;
 extern User current_user;
@@ -68,6 +103,7 @@ extern int new_game_check;
 int color_pair_num;
 int difficulty_efficiency;
 int escape_check = 0;
+int run_finished = 0;
 char diff_from_map = 0;
 int in_emoji = 0;
 int lock_color = 6;
@@ -200,6 +236,7 @@ void in_emoji_check(){
     // }
 }
 int is_enemy(int y, int x){
+    if(y<0 || y>=MAP_ROWS || x<0 || x>=MAP_COLS) return 0;
     if(game->whole_map[game->currentLevel][y][x].item == 'D' 
         || game->whole_map[game->currentLevel][y][x].item == 'F'
         || game->whole_map[game->currentLevel][y][x].item == 'G'
@@ -212,6 +249,7 @@ int is_enemy(int y, int x){
     return 0;
 }
 void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
+    if(ui_old_visuals){legacy_draw_non_flashlight_room(game_win, room, room_number);return;}
     // wattron(game_win, COLOR_PAIR(color_pair_num));
     if(!m_check){
         wattroff(game_win, COLOR_PAIR(3));
@@ -294,7 +332,7 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
     //     }
     //     wattroff(game_win, COLOR_PAIR(6));
     //     wattron(game_win, COLOR_PAIR(color_pair_num));
-    //     mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+    //     draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
     //     wattroff(game_win, COLOR_PAIR(color_pair_num));
     //     return;
     // }
@@ -302,29 +340,29 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
         for (int x = room->x; x < room->x + room->width; x++) {
             if(y == room->y && x == room->x){
                 // mvwprintw(game_win, y, x, "┌");
-                mvwprintw(game_win, y, x, "╔");
+                mvwprintw(game_win, y, x, "┌");
             }
             else if(y == room->y + room->height - 1 && x == room->x){
                 // mvwprintw(game_win, y, x, "└");
-                mvwprintw(game_win, y, x, "╚");
+                mvwprintw(game_win, y, x, "└");
             }
             else if(y == room->y && x == room->x + room->width - 1){
                 // mvwprintw(game_win, y, x, "┐");
-                mvwprintw(game_win, y, x, "╗");
+                mvwprintw(game_win, y, x, "┐");
             }
             else if(y == room->y + room->height - 1 && x == room->x + room->width - 1){
                 // mvwprintw(game_win, y, x, "┘");
-                mvwprintw(game_win, y, x, "╝");
+                mvwprintw(game_win, y, x, "┘");
             }
             else if (y == room->y) {
                 // mvwprintw(game_win, y, x, "─");
-                mvwprintw(game_win, y, x, "═");
+                mvwprintw(game_win, y, x, "─");
             } else if (y == room->y + room->height - 1) {
                 // mvwprintw(game_win, y, x, "─");
-                mvwprintw(game_win, y, x, "═");
+                mvwprintw(game_win, y, x, "─");
             } else if (x == room->x || x == room->x + room->width - 1) {
                 // mvwprintw(game_win, y, x, "│");
-                mvwprintw(game_win, y, x, "║");
+                mvwprintw(game_win, y, x, "│");
             } else {
                 mvwprintw(game_win, y, x, ".");
             }
@@ -352,7 +390,7 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
         if(room->shields[i].isUsed == false){
             wattron(game_win, COLOR_PAIR(19));
             mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x + 1, " ");
-            mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "🛡");
+            mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "◇");
             wattroff(game_win, COLOR_PAIR(19));
         }
     }
@@ -364,33 +402,33 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
                 wattroff(game_win, COLOR_PAIR(12));
             }
             else if(room->golds[i].type == 'b'){
-                mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "🌑");
+                mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "●");
             }
         }
     }
     for(int i = 0; i < room->spellCount; i++){
         if(room->spells[i].isUsed == false){
             if(room->spells[i].type == 's'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍾");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✦");
             }
             else if(room->spells[i].type == 'p'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍷");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "◆");
             }
             else if(room->spells[i].type == 'h'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍸");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✧");
             }
         }
     }
     for(int i = 0; i < room->specialfoodCount; i++){
         if(room->specialfoods[i].isUsed == false){
             if(room->specialfoods[i].type == 'n' || room->specialfoods[i].type == 'r'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍓");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♣");
             }
             else if(room->specialfoods[i].type == 'p'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍘");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♧");
             }
             else if(room->specialfoods[i].type == 's'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍟");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♠");
             }
         }
     }
@@ -427,7 +465,7 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
     for(int i = 0; i < room->trapCount; i++){
         if(room->traps[i].isVisible == true || t_check){
             wattron(game_win, COLOR_PAIR(6));
-            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
             wattroff(game_win, COLOR_PAIR(6));
         }
     }
@@ -446,7 +484,7 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
         }
         if(room->doors[i].type == 'n'){
             // mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "+");
-            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "╬");
+            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "┼");
         }
         else if(room->doors[i].type == 'l' || room->doors[i].type == 'h'){
             if(room->doors[i].is_open == false){
@@ -502,21 +540,21 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
             wattron(game_win, COLOR_PAIR(25));
         }
         if(room->window.x == room->x){
-            mvwprintw(game_win, room->window.y, room->window.x, "╣");
+            mvwprintw(game_win, room->window.y, room->window.x, "┤");
         }
         else if(room->window.y == room->y){
-            mvwprintw(game_win, room->window.y, room->window.x, "╩");
+            mvwprintw(game_win, room->window.y, room->window.x, "┴");
         }
         else if(room->window.x == room->x + room->width - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╠");
+            mvwprintw(game_win, room->window.y, room->window.x, "├");
         }
         else if(room->window.y == room->y + room->height - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╦");
+            mvwprintw(game_win, room->window.y, room->window.x, "┬");
         }
     }
     if(room_number == 0 && game->currentLevel != 0){
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
     }
     else if(room->stairCount == 1){
@@ -532,7 +570,7 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
         // else{
             wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
         // }
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         // if(room->type == 'p'){
         //     wattroff(game_win, COLOR_PAIR(17) | A_REVERSE);
         // }
@@ -551,7 +589,7 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
         in_emoji_check();
         if(in_emoji == 0){
             wattron(game_win, COLOR_PAIR(color_pair_num));
-            mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+            draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
             wattroff(game_win, COLOR_PAIR(color_pair_num));
         }
     }
@@ -571,6 +609,7 @@ void draw_non_flashlight_room(WINDOW *game_win, Room *room, int room_number) {
 }
 // Change name above and below to change the showing way.
 void draw_room(WINDOW *game_win, Room *room, int room_number) {
+    if(ui_old_visuals){legacy_draw_room(game_win, room, room_number);return;}
     // wattron(game_win, COLOR_PAIR(color_pair_num));
     if(!m_check){
         wattroff(game_win, COLOR_PAIR(3));
@@ -623,23 +662,23 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
         for (int y = room->y; y < room->y + room->height; y++) {
             for (int x = room->x; x < room->x + room->width; x++) {
                 if(y == room->y && x == room->x){
-                    mvwprintw(game_win, y, x, "╔");
+                    mvwprintw(game_win, y, x, "┌");
                 }
                 else if(y == room->y + room->height - 1 && x == room->x){
-                    mvwprintw(game_win, y, x, "╚");
+                    mvwprintw(game_win, y, x, "└");
                 }
                 else if(y == room->y && x == room->x + room->width - 1){
-                    mvwprintw(game_win, y, x, "╗");
+                    mvwprintw(game_win, y, x, "┐");
                 }
                 else if(y == room->y + room->height - 1 && x == room->x + room->width - 1){
-                    mvwprintw(game_win, y, x, "╝");
+                    mvwprintw(game_win, y, x, "┘");
                 }
                 else if (y == room->y) {
-                    mvwprintw(game_win, y, x, "═");
+                    mvwprintw(game_win, y, x, "─");
                 } else if (y == room->y + room->height - 1) {
-                    mvwprintw(game_win, y, x, "═");
+                    mvwprintw(game_win, y, x, "─");
                 } else if (x == room->x || x == room->x + room->width - 1) {
-                    mvwprintw(game_win, y, x, "║");
+                    mvwprintw(game_win, y, x, "│");
                 }
                 else{
                     mvwprintw(game_win, y, x, " ");
@@ -661,7 +700,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
             }
             if(room->doors[i].type == 'n'){
                 // mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "+");
-                mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "╬");
+                mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "┼");
             }
             else if(room->doors[i].type == 'l' || room->doors[i].type == 'h'){
                 if(room->doors[i].is_open == false){
@@ -704,16 +743,16 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
                 wattron(game_win, COLOR_PAIR(25));
             }
             if(room->window.x == room->x){
-                mvwprintw(game_win, room->window.y, room->window.x, "╣");
+                mvwprintw(game_win, room->window.y, room->window.x, "┤");
             }
             else if(room->window.y == room->y){
-                mvwprintw(game_win, room->window.y, room->window.x, "╩");
+                mvwprintw(game_win, room->window.y, room->window.x, "┴");
             }
             else if(room->window.x == room->x + room->width - 1){
-                mvwprintw(game_win, room->window.y, room->window.x, "╠");
+                mvwprintw(game_win, room->window.y, room->window.x, "├");
             }
             else if(room->window.y == room->y + room->height - 1){
-                mvwprintw(game_win, room->window.y, room->window.x, "╦");
+                mvwprintw(game_win, room->window.y, room->window.x, "┬");
             }
         }
         return;
@@ -767,46 +806,46 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
             }
             if(valid_checker && room_number == game->player->room_num){
                 if(y == room->y && x == room->x){
-                    mvwprintw(game_win, y, x, "╔");
+                    mvwprintw(game_win, y, x, "┌");
                 }
                 else if(y == room->y + room->height - 1 && x == room->x){
-                    mvwprintw(game_win, y, x, "╚");
+                    mvwprintw(game_win, y, x, "└");
                 }
                 else if(y == room->y && x == room->x + room->width - 1){
-                    mvwprintw(game_win, y, x, "╗");
+                    mvwprintw(game_win, y, x, "┐");
                 }
                 else if(y == room->y + room->height - 1 && x == room->x + room->width - 1){
-                    mvwprintw(game_win, y, x, "╝");
+                    mvwprintw(game_win, y, x, "┘");
                 }
                 else if (y == room->y) {
-                    mvwprintw(game_win, y, x, "═");
+                    mvwprintw(game_win, y, x, "─");
                 } else if (y == room->y + room->height - 1) {
-                    mvwprintw(game_win, y, x, "═");
+                    mvwprintw(game_win, y, x, "─");
                 } else if (x == room->x || x == room->x + room->width - 1) {
-                    mvwprintw(game_win, y, x, "║");
+                    mvwprintw(game_win, y, x, "│");
                 } else {
                     mvwprintw(game_win, y, x, ".");
                 }
             }
             else{
                 if(y == room->y && x == room->x){
-                    mvwprintw(game_win, y, x, "╔");
+                    mvwprintw(game_win, y, x, "┌");
                 }
                 else if(y == room->y + room->height - 1 && x == room->x){
-                    mvwprintw(game_win, y, x, "╚");
+                    mvwprintw(game_win, y, x, "└");
                 }
                 else if(y == room->y && x == room->x + room->width - 1){
-                    mvwprintw(game_win, y, x, "╗");
+                    mvwprintw(game_win, y, x, "┐");
                 }
                 else if(y == room->y + room->height - 1 && x == room->x + room->width - 1){
-                    mvwprintw(game_win, y, x, "╝");
+                    mvwprintw(game_win, y, x, "┘");
                 }
                 else if (y == room->y) {
-                    mvwprintw(game_win, y, x, "═");
+                    mvwprintw(game_win, y, x, "─");
                 } else if (y == room->y + room->height - 1) {
-                    mvwprintw(game_win, y, x, "═");
+                    mvwprintw(game_win, y, x, "─");
                 } else if (x == room->x || x == room->x + room->width - 1) {
-                    mvwprintw(game_win, y, x, "║");
+                    mvwprintw(game_win, y, x, "│");
                 }
                 else{
                     wattron(game_win, COLOR_PAIR(20));
@@ -841,16 +880,16 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
             wattron(game_win, COLOR_PAIR(25));
         }
         if(room->window.x == room->x){
-            mvwprintw(game_win, room->window.y, room->window.x, "╣");
+            mvwprintw(game_win, room->window.y, room->window.x, "┤");
         }
         else if(room->window.y == room->y){
-            mvwprintw(game_win, room->window.y, room->window.x, "╩");
+            mvwprintw(game_win, room->window.y, room->window.x, "┴");
         }
         else if(room->window.x == room->x + room->width - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╠");
+            mvwprintw(game_win, room->window.y, room->window.x, "├");
         }
         else if(room->window.y == room->y + room->height - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╦");
+            mvwprintw(game_win, room->window.y, room->window.x, "┬");
         }
     }
     for(int i = 0; i < room->doorCount; i++){
@@ -868,7 +907,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
         }
         if(room->doors[i].type == 'n'){
             // mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "+");
-            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "╬");
+            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "┼");
         }
         else if(room->doors[i].type == 'l' || room->doors[i].type == 'h'){
             if(room->doors[i].is_open == false){
@@ -968,7 +1007,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
                 first_stair = 1;
             }
             wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-            mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+            mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
             wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
         }
         return;
@@ -1077,7 +1116,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
             }
             if(valid_checker){
                 mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x + 1, " ");
-                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "🛡");
+                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "◇");
             }
             wattroff(game_win, COLOR_PAIR(19));
         }
@@ -1136,7 +1175,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
                     wattroff(game_win, COLOR_PAIR(12));
                 }
                 else if(room->golds[i].type == 'b'){
-                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "🌑");
+                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "●");
                 }
             }
         }
@@ -1190,13 +1229,13 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
             }
             if(valid_checker){
                 if(room->spells[i].type == 's'){
-                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍾");
+                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✦");
                 }
                 else if(room->spells[i].type == 'p'){
-                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍷");
+                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "◆");
                 }
                 else if(room->spells[i].type == 'h'){
-                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍸");
+                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✧");
                 }
             }
         }
@@ -1250,13 +1289,13 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
             }
             if(valid_checker){
                 if(room->specialfoods[i].type == 'n' || room->specialfoods[i].type == 'r'){
-                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍓");
+                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♣");
                 }
                 else if(room->specialfoods[i].type == 'p'){
-                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍘");
+                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♧");
                 }
                 else if(room->specialfoods[i].type == 's'){
-                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍟");
+                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♠");
                 }
             }
         }
@@ -1387,7 +1426,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
             }
             if(valid_checker){
                 wattron(game_win, COLOR_PAIR(6));
-                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
                 wattroff(game_win, COLOR_PAIR(6));
             }
         }
@@ -1454,7 +1493,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
     }
     if(room_number == 0 && game->currentLevel != 0){
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
     }
     else if(room->stairCount == 1){
@@ -1470,7 +1509,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
         // else{
             wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
         // }
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         // if(room->type == 'p'){
         //     wattroff(game_win, COLOR_PAIR(17) | A_REVERSE);
         // }
@@ -1489,7 +1528,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
         in_emoji_check();
         if(in_emoji == 0){
             wattron(game_win, COLOR_PAIR(color_pair_num));
-            mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+            draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
             wattroff(game_win, COLOR_PAIR(color_pair_num));
         }
     }
@@ -1554,6 +1593,7 @@ void draw_room(WINDOW *game_win, Room *room, int room_number) {
     // wattroff(game_win, COLOR_PAIR(color_pair_num));
 }
 void draw_last_room(WINDOW *game_win, Room *room, int room_number) {
+    if(ui_old_visuals){legacy_draw_last_room(game_win, room, room_number);boss_encounter_draw(game_win,room);return;}
     // wattron(game_win, COLOR_PAIR(color_pair_num));
     wattroff(game_win, COLOR_PAIR(3));
     wattron(game_win, COLOR_PAIR(14));
@@ -1590,7 +1630,7 @@ void draw_last_room(WINDOW *game_win, Room *room, int room_number) {
     for(int i = 0; i < room->trapCount; i++){
         wattron(game_win, COLOR_PAIR(6));
         if(room->traps[i].isVisible){
-            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
         }
         else{
             mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⟂");
@@ -1725,11 +1765,13 @@ void draw_last_room(WINDOW *game_win, Room *room, int room_number) {
     //     }
     // }
     wattron(game_win, COLOR_PAIR(color_pair_num));
-    mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+    draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
     wattroff(game_win, COLOR_PAIR(color_pair_num));
     // wattroff(game_win, COLOR_PAIR(color_pair_num));
+    boss_encounter_draw(game_win,room);
 }
 void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
+    if(ui_old_visuals){legacy_draw_nightmare_room(game_win, room, room_number);return;}
     if(room->type == 'm' && room->isVisible == true){
         wattron(game_win, COLOR_PAIR(6));
         in_nightmare = 1;
@@ -1793,7 +1835,7 @@ void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
             wattron(game_win, COLOR_PAIR(19));
             if((room->shields[i].cord.x - game->player->cord.x <= 2 && game->player->cord.x - room->shields[i].cord.x <= 2)
             && (room->shields[i].cord.y - game->player->cord.y <= 2 && game->player->cord.y - room->shields[i].cord.y <= 2)){
-                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "🛡");
+                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "◇");
                 mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x + 1, " ");
             }
             else{
@@ -1812,7 +1854,7 @@ void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
                     wattroff(game_win, COLOR_PAIR(12));
                 }
                 else if(room->golds[i].type == 'b'){
-                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "🌑");
+                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "●");
                 }
             }
             else{
@@ -1825,13 +1867,13 @@ void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
             if((room->spells[i].cord.x - game->player->cord.x <= 2 && game->player->cord.x - room->spells[i].cord.x <= 2)
             && (room->spells[i].cord.y - game->player->cord.y <= 2 && game->player->cord.y - room->spells[i].cord.y <= 2)){
                 if(room->spells[i].type == 's'){
-                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍾");
+                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✦");
                 }
                 else if(room->spells[i].type == 'p'){
-                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍷");
+                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "◆");
                 }
                 else if(room->spells[i].type == 'h'){
-                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍸");
+                    mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✧");
                 }
             }
             else{
@@ -1844,13 +1886,13 @@ void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
             if((room->specialfoods[i].cord.x - game->player->cord.x <= 2 && game->player->cord.x - room->specialfoods[i].cord.x <= 2)
             && (room->specialfoods[i].cord.y - game->player->cord.y <= 2 && game->player->cord.y - room->specialfoods[i].cord.y <= 2)){
                 if(room->specialfoods[i].type == 'n' || room->specialfoods[i].type == 'r'){
-                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍓");
+                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♣");
                 }
                 else if(room->specialfoods[i].type == 'p'){
-                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍘");
+                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♧");
                 }
                 else if(room->specialfoods[i].type == 's'){
-                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍟");
+                    mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♠");
                 }
             }
             else{
@@ -1899,7 +1941,7 @@ void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
             wattron(game_win, COLOR_PAIR(6));
             if((room->traps[i].cord.x - game->player->cord.x <= 2 && game->player->cord.x - room->traps[i].cord.x <= 2)
             && (room->traps[i].cord.y - game->player->cord.y <= 2 && game->player->cord.y - room->traps[i].cord.y <= 2)){
-                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
             }
             else{
                 mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, " ");
@@ -1981,12 +2023,12 @@ void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
     }
     if(room_number == 0 && game->currentLevel != 0){
         wattron(game_win, COLOR_PAIR(color_pair_num));
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num));
     }
     else if(room->stairCount == 1){
         wattron(game_win, COLOR_PAIR(color_pair_num));
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num));
     }
     if(room->type == 'm' && room->isVisible == true){
@@ -2005,6 +2047,7 @@ void draw_nightmare_room(WINDOW *game_win, Room *room, int room_number) {
     }
 }
 void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
+    if(ui_old_visuals){legacy_draw_attacked_room(game_win, room, room_number);return;}
     if(is_last_room){
         draw_last_room(game_win, room, room_number);
         return;
@@ -2022,23 +2065,23 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
     for (int y = room->y; y < room->y + room->height; y++) {
         for (int x = room->x; x < room->x + room->width; x++) {
             if(y == room->y && x == room->x){
-                mvwprintw(game_win, y, x, "╔");
+                mvwprintw(game_win, y, x, "┌");
             }
             else if(y == room->y + room->height - 1 && x == room->x){
-                mvwprintw(game_win, y, x, "╚");
+                mvwprintw(game_win, y, x, "└");
             }
             else if(y == room->y && x == room->x + room->width - 1){
-                mvwprintw(game_win, y, x, "╗");
+                mvwprintw(game_win, y, x, "┐");
             }
             else if(y == room->y + room->height - 1 && x == room->x + room->width - 1){
-                mvwprintw(game_win, y, x, "╝");
+                mvwprintw(game_win, y, x, "┘");
             }
             else if (y == room->y) {
-                mvwprintw(game_win, y, x, "═");
+                mvwprintw(game_win, y, x, "─");
             } else if (y == room->y + room->height - 1) {
-                mvwprintw(game_win, y, x, "═");
+                mvwprintw(game_win, y, x, "─");
             } else if (x == room->x || x == room->x + room->width - 1) {
-                mvwprintw(game_win, y, x, "║");
+                mvwprintw(game_win, y, x, "│");
             } else {
                 if((x - game->player->cord.x <= 1 && game->player->cord.x - x <= 1) && (y - game->player->cord.y <= 1 && game->player->cord.y - y <= 1)){
                     wattron(game_win, COLOR_PAIR(color_pair_num));
@@ -2087,13 +2130,13 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
                 // wattron(game_win, COLOR_PAIR(color_pair_num));
                 wattron(game_win, COLOR_PAIR(19));
                 mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x + 1, " ");
-                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "🛡");
+                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "◇");
                 wattroff(game_win, COLOR_PAIR(19));
                 // wattroff(game_win, COLOR_PAIR(color_pair_num));
             }
             else{
                 mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x + 1, " ");
-                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "🛡");
+                mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "◇");
             }
             wattroff(game_win, COLOR_PAIR(19));
             wattron(game_win, COLOR_PAIR(color_pair_num));
@@ -2113,7 +2156,7 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
                     wattroff(game_win, COLOR_PAIR(12));
                 }
                 else if(room->golds[i].type == 'b'){
-                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "🌑");
+                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "●");
                 }
             }
             else{
@@ -2123,7 +2166,7 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
                     wattroff(game_win, COLOR_PAIR(12));
                 }
                 else if(room->golds[i].type == 'b'){
-                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "🌑");
+                    mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "●");
                 }
             }
         }
@@ -2131,26 +2174,26 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
     for(int i = 0; i < room->spellCount; i++){
         if(room->spells[i].isUsed == false){
             if(room->spells[i].type == 's'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍾");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✦");
             }
             else if(room->spells[i].type == 'p'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍷");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "◆");
             }
             else if(room->spells[i].type == 'h'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍸");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✧");
             }
         }
     }
     for(int i = 0; i < room->specialfoodCount; i++){
         if(room->specialfoods[i].isUsed == false){
             if(room->specialfoods[i].type == 'n' || room->specialfoods[i].type == 'r'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍓");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♣");
             }
             else if(room->specialfoods[i].type == 'p'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍘");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♧");
             }
             else if(room->specialfoods[i].type == 's'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍟");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♠");
             }
         }
     }
@@ -2185,29 +2228,29 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
         }
     }
     for(int i = 0; i < room->trapCount; i++){
-        if(player->currentWeapon.type == 's' && player->weapons[4].count >= 2 
+        if(game->player->currentWeapon.type == 's' && game->player->weapons[4].count >= 2
         &&(room->traps[i].cord.x - game->player->cord.x <= 1 && game->player->cord.x - room->traps[i].cord.x <= 1)
         && (room->traps[i].cord.y - game->player->cord.y <= 1 && game->player->cord.y - room->traps[i].cord.y <= 1)){
             wattron(game_win, COLOR_PAIR(color_pair_num));
-            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
             wattroff(game_win, COLOR_PAIR(color_pair_num));
-            room->traps[i].isVisible == true;
+            room->traps[i].isVisible = true;
         }
         if(room->traps[i].isVisible == true){
             wattron(game_win, COLOR_PAIR(6));
             if((room->traps[i].cord.x - game->player->cord.x <= 1 && game->player->cord.x - room->traps[i].cord.x <= 1)
             && (room->traps[i].cord.y - game->player->cord.y <= 1 && game->player->cord.y - room->traps[i].cord.y <= 1)){
-                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
             }
             else{
-                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+                mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
             }
             wattroff(game_win, COLOR_PAIR(6));
         }
     }
     for(int i = 0; i < room->doorCount; i++){
         if(room->doors[i].type == 'n'){
-            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "╬");
+            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "┼");
         }
         else if(room->doors[i].type == 's' && room->doors[i].password == 1){
             mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "‽");
@@ -2238,16 +2281,16 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
     }
     if(room->window.x != 0 && room->window.x != 0){
         if(room->window.x == room->x){
-            mvwprintw(game_win, room->window.y, room->window.x, "╣");
+            mvwprintw(game_win, room->window.y, room->window.x, "┤");
         }
         else if(room->window.y == room->y){
-            mvwprintw(game_win, room->window.y, room->window.x, "╩");
+            mvwprintw(game_win, room->window.y, room->window.x, "┴");
         }
         else if(room->window.x == room->x + room->width - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╠");
+            mvwprintw(game_win, room->window.y, room->window.x, "├");
         }
         else if(room->window.y == room->y + room->height - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╦");
+            mvwprintw(game_win, room->window.y, room->window.x, "┬");
         }
     }
     for(int i = 0; i < room->enemyCount; i++){
@@ -2259,12 +2302,12 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
     }
     if(room_number == 0 && game->currentLevel != 0){
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
     }
     else if(room->stairCount == 1){
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
     }
     else if(room->type == 'm' && room->isVisible == true){
@@ -2279,6 +2322,7 @@ void draw_attacked_room(WINDOW *game_win, Room *room, int room_number) {
     color_pair_num = temp;
 }
 void draw_ranged_attacked_room(WINDOW *game_win, Room *room, int room_number, int dx, int dy) {
+    if(ui_old_visuals){legacy_draw_ranged_attacked_room(game_win, room, room_number, dx, dy);return;}
     // wattron(game_win, COLOR_PAIR(color_pair_num));
     if(is_last_room){
         draw_last_room(game_win, room, room_number);
@@ -2320,23 +2364,23 @@ void draw_ranged_attacked_room(WINDOW *game_win, Room *room, int room_number, in
     for (int y = room->y; y < room->y + room->height; y++) {
         for (int x = room->x; x < room->x + room->width; x++) {
             if(y == room->y && x == room->x){
-                mvwprintw(game_win, y, x, "╔");
+                mvwprintw(game_win, y, x, "┌");
             }
             else if(y == room->y + room->height - 1 && x == room->x){
-                mvwprintw(game_win, y, x, "╚");
+                mvwprintw(game_win, y, x, "└");
             }
             else if(y == room->y && x == room->x + room->width - 1){
-                mvwprintw(game_win, y, x, "╗");
+                mvwprintw(game_win, y, x, "┐");
             }
             else if(y == room->y + room->height - 1 && x == room->x + room->width - 1){
-                mvwprintw(game_win, y, x, "╝");
+                mvwprintw(game_win, y, x, "┘");
             }
             else if (y == room->y) {
-                mvwprintw(game_win, y, x, "═");
+                mvwprintw(game_win, y, x, "─");
             } else if (y == room->y + room->height - 1) {
-                mvwprintw(game_win, y, x, "═");
+                mvwprintw(game_win, y, x, "─");
             } else if (x == room->x || x == room->x + room->width - 1) {
-                mvwprintw(game_win, y, x, "║");
+                mvwprintw(game_win, y, x, "│");
             } else {
                 if(dx == 1){
                     if(x > game->player->cord.x && y == game->player->cord.y && x - game->player->cord.x <= game->player->currentWeapon.range){
@@ -2398,7 +2442,7 @@ void draw_ranged_attacked_room(WINDOW *game_win, Room *room, int room_number, in
         if(room->shields[i].isUsed == false){
             wattron(game_win, COLOR_PAIR(19));
             mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x + 1, " ");
-            mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "🛡");
+            mvwprintw(game_win, room->shields[i].cord.y, room->shields[i].cord.x, "◇");
             wattroff(game_win, COLOR_PAIR(19));
         }
         wattron(game_win, COLOR_PAIR(color_pair_num));
@@ -2413,33 +2457,33 @@ void draw_ranged_attacked_room(WINDOW *game_win, Room *room, int room_number, in
                 wattroff(game_win, COLOR_PAIR(12));
             }
             else if(room->golds[i].type == 'b'){
-                mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "🌑");
+                mvwprintw(game_win, room->golds[i].cord.y, room->golds[i].cord.x, "●");
             }
         }
     }
     for(int i = 0; i < room->spellCount; i++){
         if(room->spells[i].isUsed == false){
             if(room->spells[i].type == 's'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍾");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✦");
             }
             else if(room->spells[i].type == 'p'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍷");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "◆");
             }
             else if(room->spells[i].type == 'h'){
-                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "🍸");
+                mvwprintw(game_win, room->spells[i].cord.y, room->spells[i].cord.x, "✧");
             }
         }
     }
     for(int i = 0; i < room->specialfoodCount; i++){
         if(room->specialfoods[i].isUsed == false){
             if(room->specialfoods[i].type == 'n' || room->specialfoods[i].type == 'r'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍓");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♣");
             }
             else if(room->specialfoods[i].type == 'p'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍘");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♧");
             }
             else if(room->specialfoods[i].type == 's'){
-                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "🍟");
+                mvwprintw(game_win, room->specialfoods[i].cord.y, room->specialfoods[i].cord.x, "♠");
             }
         }
     }
@@ -2476,13 +2520,13 @@ void draw_ranged_attacked_room(WINDOW *game_win, Room *room, int room_number, in
     for(int i = 0; i < room->trapCount; i++){
         if(room->traps[i].isVisible == true || t_check){
             wattron(game_win, COLOR_PAIR(6));
-            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "⚺");
+            mvwprintw(game_win, room->traps[i].cord.y, room->traps[i].cord.x, "^");
             wattroff(game_win, COLOR_PAIR(6));
         }
     }
     for(int i = 0; i < room->doorCount; i++){
         if(room->doors[i].type == 'n'){
-            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "╬");
+            mvwprintw(game_win, room->doors[i].cord.y, room->doors[i].cord.x, "┼");
         }
         else if(room->doors[i].type == 'l' || room->doors[i].type == 'h'){
             if(room->doors[i].is_open == false){
@@ -2520,26 +2564,26 @@ void draw_ranged_attacked_room(WINDOW *game_win, Room *room, int room_number, in
     }
     if(room->window.x != 0 && room->window.x != 0){
         if(room->window.x == room->x){
-            mvwprintw(game_win, room->window.y, room->window.x, "╣");
+            mvwprintw(game_win, room->window.y, room->window.x, "┤");
         }
         else if(room->window.y == room->y){
-            mvwprintw(game_win, room->window.y, room->window.x, "╩");
+            mvwprintw(game_win, room->window.y, room->window.x, "┴");
         }
         else if(room->window.x == room->x + room->width - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╠");
+            mvwprintw(game_win, room->window.y, room->window.x, "├");
         }
         else if(room->window.y == room->y + room->height - 1){
-            mvwprintw(game_win, room->window.y, room->window.x, "╦");
+            mvwprintw(game_win, room->window.y, room->window.x, "┬");
         }
     }
     if(room_number == 0 && game->currentLevel != 0){
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
     }
     else if(room->stairCount == 1){
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "⛩ ");
+        mvwprintw(game_win, room->stair.cord.y, room->stair.cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
     }
     if(room->type == 's' && room->isVisible == true){
@@ -2568,13 +2612,16 @@ void clear_room(WINDOW *game_win, Room *room, int room_number) {
     }
 }
 void print_map(WINDOW *game_win){
+    if(ui_old_visuals){legacy_print_map(game_win);return;}
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width - BORDER_PADDING;
     int end_y = map_height - BORDER_PADDING;
-    srand(time(NULL));
+
     // keypad(game_win, TRUE);
     game->levels[game->currentLevel]->rooms[0]->isVisible = true;
     for(int i = start_y; i < map_height; i++){
@@ -2582,7 +2629,7 @@ void print_map(WINDOW *game_win){
             if(game->whole_map[game->currentLevel][i][j].isVisible == true && game->whole_map[game->currentLevel][i][j].item == '#'){
                 wattron(game_win, COLOR_PAIR(3));
                 // mvwprintw(game_win, i, j, "%lc", game->whole_map[game->currentLevel][i][j].item);
-                mvwprintw(game_win, i, j, "█");
+                mvwprintw(game_win, i, j, "░");
                 wattroff(game_win, COLOR_PAIR(3));
             }
             else{
@@ -2612,7 +2659,7 @@ void print_map(WINDOW *game_win){
     //     }
     // }
     wattron(game_win, COLOR_PAIR(color_pair_num));
-    mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+    draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
     box(game_win, 0, 0);
     if(color_pair_num == 0){
         wattron(game_win, COLOR_PAIR(14));
@@ -2625,16 +2672,20 @@ void print_map(WINDOW *game_win){
     mvwprintw(game_win, map_height - 3, map_width - 22, "█████████████████");
     wattroff(game_win, COLOR_PAIR(color_pair_num));
     wattroff(game_win, COLOR_PAIR(14));
+    mvwprintw(game_win, map_height-1, 3, " H: Field guide  |  Tab: Inventory  |  Esc: Pause ");
     wrefresh(game_win);
 }
 void print_all_map(WINDOW *game_win){
+    if(ui_old_visuals){legacy_print_all_map(game_win);return;}
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width * 3 / 4 - BORDER_PADDING;
     int end_y = map_height * 3 / 4 - BORDER_PADDING;
-    srand(time(NULL));
+
     for(int i = start_y; i < map_height; i++){
         for(int j = start_x; j < map_width; j++){
             if(game->whole_map[game->currentLevel][i][j].isVisible == true){
@@ -2645,24 +2696,24 @@ void print_all_map(WINDOW *game_win){
             }
             if(game->whole_map[game->currentLevel][i][j].item == '#'){
                 // mvwprintw(game_win, i, j, "%lc", game->whole_map[game->currentLevel][i][j].item);
-                mvwprintw(game_win, i, j, "█");
+                mvwprintw(game_win, i, j, "░");
             }
             wattroff(game_win, COLOR_PAIR(3));
             wattroff(game_win, COLOR_PAIR(10));
         }
     }
     for(int i = 0; i < game->levels[game->currentLevel]->roomsCount; i++){
-        if(game_win, game->levels[game->currentLevel]->rooms[i]->isVisible == false){
+        if(game->levels[game->currentLevel]->rooms[i]->isVisible == false){
             wattron(game_win, COLOR_PAIR(20));
         }
         all_print = 1;
         draw_room(game_win, game->levels[game->currentLevel]->rooms[i], i);
-        if(game_win, game->levels[game->currentLevel]->rooms[i]->isVisible == false){
+        if(game->levels[game->currentLevel]->rooms[i]->isVisible == false){
             wattroff(game_win, COLOR_PAIR(20));
         }
     }
     wattron(game_win, COLOR_PAIR(color_pair_num));
-    mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+    draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
     box(game_win, 0, 0);
     wattroff(game_win, COLOR_PAIR(color_pair_num));
     all_print = 0;
@@ -2696,7 +2747,7 @@ void continue_corridor(WINDOW *game_win, int y, int x, int a){
                         mvwprintw(game_win, next[i].y, next[i].x, "☯");
                     }
                     else{
-                        mvwprintw(game_win, next[i].y, next[i].x, "╬");
+                        mvwprintw(game_win, next[i].y, next[i].x, "┼");
                     }
                     game->whole_map[game->currentLevel][next[i].y][next[i].x].isVisible = true;
                 }
@@ -2718,7 +2769,7 @@ void continue_corridor(WINDOW *game_win, int y, int x, int a){
 void printf_diff_from_map(WINDOW *game_win){
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '+'){
         diff_from_map = '+';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "╬");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "┼");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == 'L'){
@@ -2764,28 +2815,28 @@ void printf_diff_from_map(WINDOW *game_win){
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '>' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '>'){
         diff_from_map = '>';
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "⛩ ");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '>' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '>'){
         diff_from_map = '>';
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "⛩ ");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '<' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '<'){
         diff_from_map = '<';
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "⛩ ");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '<' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '<'){
         diff_from_map = '<';
         wattron(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "⛩ ");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "≡ ");
         wattroff(game_win, COLOR_PAIR(color_pair_num) | A_REVERSE);
         return;
     }
@@ -2813,7 +2864,7 @@ void printf_diff_from_map(WINDOW *game_win){
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '^'){
         diff_from_map = '^';
         wattron(game_win, COLOR_PAIR(6));
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "⚺");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "^");
         wattroff(game_win, COLOR_PAIR(6));
         return;
     }
@@ -2826,88 +2877,88 @@ void printf_diff_from_map(WINDOW *game_win){
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '*' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '*'){
         diff_from_map = '*';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🌑");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "●");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '*' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '*'){
         diff_from_map = '*';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🌑");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "●");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == 'E' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == 'E'){
         diff_from_map = 'E';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🍾");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "✦");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == 'E' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == 'E'){
         diff_from_map = 'E';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🍾");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "✦");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == 'P' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == 'P'){
         diff_from_map = 'P';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🍷");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "◆");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == 'P' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == 'P'){
         diff_from_map = 'P';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🍷");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "◆");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == 'H' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == 'H'){
         diff_from_map = 'H';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🍸");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "✧");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == 'H' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == 'H'){
         diff_from_map = 'H';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🍸");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "✧");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '6' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '6'){
         diff_from_map = '6';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🍓");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "♣");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '6' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '6'){
         diff_from_map = '6';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🍓");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "♣");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '9' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '9'){
         diff_from_map = '9';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🍓");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "♣");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '9' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '9'){
         diff_from_map = '9';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🍓");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "♣");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '7' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '7'){
         diff_from_map = '7';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🍘");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "♧");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '7' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '7'){
         diff_from_map = '7';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🍘");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "♧");
         return;
     }
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '8' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '8'){
         diff_from_map = '8';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🍟");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "♠");
         return;
     }
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '8' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '8'){
         diff_from_map = '9';
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🍟");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "♠");
         return;
     }
     // else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '1' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '1'){
     //     diff_from_map = '1';
     //     wattron(game_win, COLOR_PAIR(16));
-    //     mvwprintw(game_win, game->player->cord.y, game->player->cord.x + 1, "⚒");
+    //     mvwprintw(game_win, game->player->cord.y, game->player->cord.x + 1, "♠");
     //     mvwprintw(game_win, game->player->cord.y, game->player->cord.x + 2, ".");
     //     wattroff(game_win, COLOR_PAIR(16));
     //     return;
@@ -2915,7 +2966,7 @@ void printf_diff_from_map(WINDOW *game_win){
     // else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '1' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '1'){
     //     diff_from_map = '1';
     //     wattron(game_win, COLOR_PAIR(16));
-    //     mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "⚒");
+    //     mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "♠");
     //     mvwprintw(game_win, game->player->cord.y, game->player->cord.x, ".");
     //     wattroff(game_win, COLOR_PAIR(16));
     //     return;
@@ -2923,7 +2974,7 @@ void printf_diff_from_map(WINDOW *game_win){
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '1'){
         diff_from_map = '1';
         wattron(game_win, COLOR_PAIR(16));
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "⚒");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "♠");
         wattroff(game_win, COLOR_PAIR(16));
         return;
     }
@@ -3013,7 +3064,7 @@ void printf_diff_from_map(WINDOW *game_win){
     if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '!' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '!'){
         diff_from_map = '!';
         wattron(game_win, COLOR_PAIR(19));
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "🛡");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "◇");
         mvwprintw(game_win, game->player->cord.y, game->player->cord.x + 1, " ");
         wattroff(game_win, COLOR_PAIR(19));
         return;
@@ -3021,7 +3072,7 @@ void printf_diff_from_map(WINDOW *game_win){
     else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '!' && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == '!'){
         diff_from_map = '!';
         wattron(game_win, COLOR_PAIR(19));
-        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "🛡");
+        mvwprintw(game_win, game->player->cord.y, game->player->cord.x - 1, "◇");
         mvwprintw(game_win, game->player->cord.y, game->player->cord.x, " ");
         wattroff(game_win, COLOR_PAIR(19));
         return;
@@ -3119,8 +3170,9 @@ void print_last_dragon(WINDOW *game_win){
     wrefresh(game_win);
 }
 void lost_game_screen(time_t start_time) {
+    run_finished=1;
     { //Variable Reset
-        escape_check = 0;
+        escape_check = 1;
         diff_from_map = 0;
         in_emoji = 0;
         lock_color = 6;
@@ -3150,6 +3202,7 @@ void lost_game_screen(time_t start_time) {
         last_one = 0;
     }
     Mix_HaltMusic();
+    music_stop_playlist();
     Mix_PlayMusic(loosing_effect, 1);
     game->player->can_be_saved = 0;
     game->player->games_count++;
@@ -3316,31 +3369,34 @@ void lost_game_screen(time_t start_time) {
     wattron(lost_win, COLOR_PAIR(3));
     mvwprintw(lost_win, LINES - 11 - a, COLS - 76, "╭───────────────────────────────────────────────────╮");
     mvwprintw(lost_win, LINES - 10 - a, COLS - 76, "│ Hey my friend, I guess you had bad luck!          │");
-    mvwprintw(lost_win, LINES - 9 - a, COLS - 76, "│ No problem! You can surely make it next time.🔥   │");
+    mvwprintw(lost_win, LINES - 9 - a, COLS - 76, UI_TEXT("│ No problem! You can surely make it next time.🔥   │","│ No problem! You can surely make it next time.✦   │"));
     mvwprintw(lost_win, LINES - 8 - a, COLS - 76, "│ After all those quotes I hope you enjoyed the game│");
     mvwprintw(lost_win, LINES - 7 - a, COLS - 76, "│ And most important thing is the friendship that   │");
     mvwprintw(lost_win, LINES - 6 - a, COLS - 76, "│ I made with you along this journey %s", game->player->name);
     mvwprintw(lost_win, LINES - 6 - a, COLS - 24, "│");
-    mvwprintw(lost_win, LINES - 5 - a, COLS - 76, "│ See you soon. 😉                                 _⧹");
+    mvwprintw(lost_win, LINES - 5 - a, COLS - 76, UI_TEXT("│ See you soon. 😉                                 _⧹","│ See you soon. ;)                                 _⧹"));
     mvwprintw(lost_win, LINES - 4 - a, COLS - 76, "╰─────────────────────────────────────────────────┘  ¯");
     wattroff(lost_win, COLOR_PAIR(3));
+    mvwaddstr(lost_win,LINES-2,4,"Enter / Esc: return to the main menu");
     wrefresh(lost_win);
     sleep(3);
     while(1){
-        char c = wgetch(lost_win);
-        if(c == 10){
+        int c = music_getch(lost_win);
+        if(c == 10 || c == KEY_ENTER || c == 27){
             break;
         }
     }
     wclear(lost_win);
     wrefresh(lost_win);
     delwin(lost_win);
-    endwin();
+    clear();refresh();
     Mix_HaltMusic();
 }
 void win_game_screen(time_t start_time) {
+    if(victory_results_closed())return;
+    run_finished=1;
     { //Variable Reset
-        escape_check = 0;
+        escape_check = 1;
         diff_from_map = 0;
         in_emoji = 0;
         lock_color = 6;
@@ -3370,13 +3426,15 @@ void win_game_screen(time_t start_time) {
         last_one = 0;
     }
     Mix_HaltMusic();
+    music_stop_playlist();
     Mix_PlayMusic(winning_effect, 1);
     game->player->can_be_saved = 0;
-    game->player->games_count;
+    game->player->games_count++;
     int win_height = LINES, win_width = COLS;
     int startx = (COLS - win_width) / 2;
     int starty = (LINES - win_height) / 2;
     WINDOW *win_win = newwin(win_height, win_width, starty, startx);
+    if(ui_old_visuals){
     { // Angel
         int a1 = 3, b1 = 8;
         wattron(win_win, COLOR_PAIR(117));
@@ -3524,29 +3582,24 @@ void win_game_screen(time_t start_time) {
     wattron(win_win, COLOR_PAIR(3));
     mvwprintw(win_win, LINES - 11 - a, COLS - 76, "╭───────────────────────────────────────────────────╮");
     mvwprintw(win_win, LINES - 10 - a, COLS - 76, "│ Hey my friend, I knew you could make it through!  │");
-    mvwprintw(win_win, LINES - 9 - a, COLS - 76, "│ Well done! You are that one worthy hero.🔥        │");
+    mvwprintw(win_win, LINES - 9 - a, COLS - 76, UI_TEXT("│ Well done! You are that one worthy hero.🔥        │","│ Well done! You are that one worthy hero.✦        │"));
     mvwprintw(win_win, LINES - 8 - a, COLS - 76, "│ After all those quotes I hope you enjoyed the game│");
     mvwprintw(win_win, LINES - 7 - a, COLS - 76, "│ And most important thing is the friendship that   │");
     mvwprintw(win_win, LINES - 6 - a, COLS - 76, "│ I made with you along this journey %s =)", game->player->name);
     mvwprintw(win_win, LINES - 6 - a, COLS - 24, "│");
-    mvwprintw(win_win, LINES - 5 - a, COLS - 76, "│ See you soon. 😉                                 _⧹");
+    mvwprintw(win_win, LINES - 5 - a, COLS - 76, UI_TEXT("│ See you soon. 😉                                 _⧹","│ See you soon. ;)                                 _⧹"));
     mvwprintw(win_win, LINES - 4 - a, COLS - 76, "╰─────────────────────────────────────────────────┘  ¯");
     wattroff(win_win, COLOR_PAIR(3));
-    wrefresh(win_win);
-    sleep(5);
-    while(1){
-        char c = wgetch(win_win);
-        if(c == 10){
-            break;
-        }
     }
+    victory_results_screen(win_win,start_time);
     wclear(win_win);
     wrefresh(win_win);
     delwin(win_win);
-    endwin();
+    clear();refresh();
     Mix_HaltMusic();
 }
 int valid_move_check(int y, int x){
+    if (y < 0 || y >= MAP_ROWS || x < 0 || x >= MAP_COLS) return 0;
     if(game->whole_map[game->currentLevel][y][x].item != '|' 
     && game->whole_map[game->currentLevel][y][x].item != '-' 
     && game->whole_map[game->currentLevel][y][x].item != '_' 
@@ -3557,13 +3610,11 @@ int valid_move_check(int y, int x){
         if(valid_f_check && (game->whole_map[game->currentLevel][y][x].item == 'L' || game->whole_map[game->currentLevel][y][x].item ==  '+')){
             return 0;
         }
-        if(game->whole_map[game->currentLevel][y][x].item == 'L'){
-            for(int i = 0; i < game->levels[game->currentLevel]->rooms[game->player->room_num]->doorCount; i++){
-                if(game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[i].is_open == false 
-                && game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[i].cord.x == x 
-                && game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[i].cord.y == y){
-                    return 0;
-                }
+        for(int r=0;r<game->levels[game->currentLevel]->roomsCount;r++){
+            Room *room=game->levels[game->currentLevel]->rooms[r];
+            for(int i=0;i<room->doorCount;i++){
+                Door *d=&room->doors[i];
+                if((d->type=='l'||d->type=='h')&&!d->is_open&&d->cord.x==x&&d->cord.y==y)return 0;
             }
         }
         return 1;
@@ -3571,6 +3622,18 @@ int valid_move_check(int y, int x){
     else{
         return 0;
     }
+}
+/* A diagonal or sword lunge must traverse every tile and cannot clip a locked corner. */
+int player_step_valid(int y,int x){
+    int px=game->player->cord.x,py=game->player->cord.y;
+    int dx=(x>px)-(x<px),dy=(y>py)-(y<py);
+    while(px!=x||py!=y){
+        int nx=px==x?px:px+dx,ny=py==y?py:py+dy;
+        if(!valid_move_check(ny,nx))return 0;
+        if(nx!=px&&ny!=py&&(!valid_move_check(py,nx)||!valid_move_check(ny,px)))return 0;
+        px=nx;py=ny;
+    }
+    return 1;
 }
 void enemy_move_can_pass_throw_corridors(Enemy *enemy, WINDOW *game_win){
     if(enemy->canMove == false || enemy->isAlive == false){
@@ -3723,6 +3786,18 @@ void enemy_move(Enemy *enemy, WINDOW *game_win){
         }
     }
 }
+void entering_password(void);
+static int enter_door_password(int y,int x){
+    int previous=game->player->room_num;
+    for(int r=0;r<game->levels[game->currentLevel]->roomsCount;r++){
+        Room *room=game->levels[game->currentLevel]->rooms[r];
+        for(int d=0;d<room->doorCount;d++)if(room->doors[d].cord.x==x&&room->doors[d].cord.y==y&&(room->doors[d].type=='l'||room->doors[d].type=='h')){
+            game->player->room_num=r;room->lock_door=d;last_attemps=room->lock_attemps;
+            entering_password();room->lock_attemps=last_attemps;
+            game->player->room_num=previous;return 1;
+        }
+    }return 0;
+}
 void entering_password() {
     if(first_lock_door == 0){
         first_lock_door = 1;
@@ -3786,7 +3861,7 @@ void entering_password() {
         }
         wrefresh(password_win);
 
-        choice = wgetch(password_win);
+        choice = music_getch(password_win);
 
         switch (choice) {
             case KEY_UP:
@@ -3825,7 +3900,7 @@ void entering_password() {
                                 game->levels[game->currentLevel]->rooms[0]->enemyLeft = 0;
                             }
                             wrefresh(password_win);
-                            wgetch(password_win);
+                            music_getch(password_win);
                             wclear(password_win);
                             wrefresh(password_win);
                             delwin(password_win);
@@ -3835,7 +3910,7 @@ void entering_password() {
                         }
                     }
                     wrefresh(password_win);
-                    wgetch(password_win);
+                    music_getch(password_win);
                     break;
                 } else if (highlight == 1 && game->currentLevel != 6) {
                     if(game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_door].type == 'l'){
@@ -3860,7 +3935,7 @@ void entering_password() {
                                 wattroff(password_win, COLOR_PAIR(7));
                                 game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_door].is_open = true;
                                 wrefresh(password_win);
-                                wgetch(password_win);
+                                music_getch(password_win);
                                 wclear(password_win);
                                 wrefresh(password_win);
                                 delwin(password_win);
@@ -3885,7 +3960,7 @@ void entering_password() {
                                 mvwprintw(password_win, 3, 1, "Incorrect Password. Try again.");
                                 mvwprintw(password_win, 4, 1, "It might be reversed!");
                                 wattroff(password_win, COLOR_PAIR(color));
-                                // wgetch(password_win);
+                                // music_getch(password_win);
                                 break;
                             }
                         }
@@ -3898,7 +3973,7 @@ void entering_password() {
                         }
                         
                         wrefresh(password_win);
-                        wgetch(password_win);
+                        music_getch(password_win);
                         break;
                     }
                     else{
@@ -3927,7 +4002,7 @@ void entering_password() {
                                 wattroff(password_win, COLOR_PAIR(7));
                                 game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_door].is_open = true;
                                 wrefresh(password_win);
-                                wgetch(password_win);
+                                music_getch(password_win);
                                 wclear(password_win);
                                 wrefresh(password_win);
                                 delwin(password_win);
@@ -3950,7 +4025,7 @@ void entering_password() {
                                 wattron(password_win, COLOR_PAIR(color));
                                 mvwprintw(password_win, 3, 1, "Incorrect Password. Try again.");
                                 wattroff(password_win, COLOR_PAIR(color));
-                                // wgetch(password_win);
+                                // music_getch(password_win);
                                 break;
                             }
                         }
@@ -3961,7 +4036,7 @@ void entering_password() {
                             wattroff(password_win, COLOR_PAIR(6));
                         }
                         wrefresh(password_win);
-                        wgetch(password_win);
+                        music_getch(password_win);
                         break;
                     }
                 }
@@ -4033,6 +4108,8 @@ void enemy_find(int y, int x, WINDOW *game_win){
 }
 void after_find_enemy(WINDOW *game_win){
     for(int i = 0; i < game->levels[game->currentLevel]->rooms[game->player->room_num]->enemyCount; i++){
+        Enemy *current=&game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i];
+        if(current->type=='i'&&(!is_last_room||!current->isAlive))continue;
         if(game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].type == 's'
         && (game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].moves == 0
         || game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].moves == 1)
@@ -4046,7 +4123,7 @@ void after_find_enemy(WINDOW *game_win){
             }
         }
         else if(game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].type == 'i'){
-            enemy_move(&game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i], game_win);
+            boss_encounter_tick(current, game_win);
             draw_last_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], i);
         }
         else if(game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].type == 'g'){
@@ -4090,7 +4167,7 @@ void after_find_enemy(WINDOW *game_win){
                     mvwprintw(game_win, 2, 82, "  Hey, you're near the Immortal and damaged by %d :<", damage);
                 }
                 else if(message == 1){
-                    mvwprintw(game_win, 2, 82, "  Keep your distance! You've been damaged for %d🎆", damage);
+                    mvwprintw(game_win, 2, 82, "  Keep your distance! You've been damaged for %d✦", damage);
                 }
                 else if(message == 2){
                     mvwprintw(game_win, 2, 82, "  Oh crap, Immortal Monster damaged you by it zone for %d D=", damage);
@@ -4152,7 +4229,7 @@ void after_find_enemy(WINDOW *game_win){
                 game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].name, damage);
             }
             else if(message == 1){
-                mvwprintw(game_win, 2, 82, "  Ah shit, you've been hit by %s and recieved %d damage🗿", 
+                mvwprintw(game_win, 2, 82, "  Ah shit, you've been hit by %s and recieved %d damage♜",
                 game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].name, damage);
             }
             else if(message == 2){
@@ -4200,7 +4277,7 @@ void after_find_enemy(WINDOW *game_win){
                 mvwprintw(game_win, 2, 82, "  Hey, you're near the Immortal and damaged by %d :<", damage);
             }
             else if(message == 1){
-                mvwprintw(game_win, 2, 82, "  Keep your distance! You've been damaged for %d🎆", damage);
+                mvwprintw(game_win, 2, 82, "  Keep your distance! You've been damaged for %d✦", damage);
             }
             else if(message == 2){
                 mvwprintw(game_win, 2, 82, "  Oh crap, Immortal Monster damaged you by it zone for %d D=", damage);
@@ -4226,8 +4303,11 @@ void after_find_enemy(WINDOW *game_win){
     }
 }
 void after_move(WINDOW *game_win){
+    if(escape_check||run_finished)return;
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width * 3 / 4 - BORDER_PADDING;
@@ -4243,7 +4323,7 @@ void after_move(WINDOW *game_win){
                     if(difficulty_efficiency >= 2 && rand() % 6 == 5){
                         poisonous_food_check = 1;
                         // for(int j = 0; j < game->player->foodCount; j++){
-                        //     mvwprintw(game_win, map_height - 4 + j / 10, 5 + 2*j - 2*(j/10)*10, "🍖");
+                        //     mvwprintw(game_win, map_height - 4 + j / 10, 5 + 2*j - 2*(j/10)*10, "♣");
                         // }
                         mvwprintw(game_win, 3, 5, "                                                                                ");
                         mvwprintw(game_win, 3, 5, "Ops! Poisonous food O_o");
@@ -4331,7 +4411,7 @@ void after_move(WINDOW *game_win){
                         if(!strcmp(selected_music, "./Base_Sounds/silent.wav") && game->currentLevel != game->levelCount - 1){
                             Mix_PlayMusic(black_coin_effect, 1);
                         }
-                        mvwprintw(game_win, 3, 5, "Wow! You've collected a black gold with amount of %d 💰", 
+                        mvwprintw(game_win, 3, 5, "Wow! You've collected a black gold with amount of %d ¤",
                         game->levels[game->currentLevel]->rooms[game->player->room_num]->golds[j].count * difficulty_efficiency);
                         wattroff(game_win, COLOR_PAIR(color_pair_num));
                         if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == '*'){
@@ -4621,10 +4701,10 @@ void after_move(WINDOW *game_win){
                         x_save = game->player->cord.x;
                         y_save = game->player->cord.y;
                         level_save = game->currentLevel;
+                        room_num_save = game->player->room_num;
                         game->currentLevel = 6;
                         is_battle = 1;
                         back_front = 1;
-                        room_num_save = game->player->room_num;
                     }
                     return;
                 }
@@ -4672,18 +4752,18 @@ void after_move(WINDOW *game_win){
             && game->levels[game->currentLevel]->rooms[game->player->room_num]->password_generator.y == game->player->cord.y){
                 game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_door].password = password;
                 mvwprintw(game_win, 2, 5, "                                                                                  ");
-                mvwprintw(game_win, 2, 5, "Lock password 1 is %d 🗝", password_copy);
+                mvwprintw(game_win, 2, 5, "Lock password 1 is %d ⚿", password_copy);
             }
             else{
                 game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_door].password2 = password;
                 mvwprintw(game_win, 2, 5, "                                                                                  ");
-                mvwprintw(game_win, 2, 5, "Lock password 2 is %d 🗝", password_copy);
+                mvwprintw(game_win, 2, 5, "Lock password 2 is %d ⚿", password_copy);
             }
         }
         else{
             game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_door].password = password;
             mvwprintw(game_win, 2, 5, "                                                                                  ");
-            mvwprintw(game_win, 2, 5, "Lock password is %d 🗝", password_copy);
+            mvwprintw(game_win, 2, 5, "Lock password is %d ⚿", password_copy);
         }
         is_pass_lock = 1;
         password_disapear = 0;
@@ -4782,11 +4862,12 @@ void after_move(WINDOW *game_win){
                 }
             }
         }
-    if(game->currentLevel == game->levelCount - 1 && is_last_room == 0){
+    if(!run_finished && !escape_check && game->currentLevel == game->levelCount - 1 && is_last_room == 0){
         if(game->levels[game->currentLevel]->rooms[0]->enemyLeft <= 0){
             for(int i = 0; i < game->levels[game->currentLevel]->rooms[0]->enemyCount + 1; i++){
                 if(game->levels[game->currentLevel]->rooms[0]->enemies[i].type == 'i'){
                     game->levels[game->currentLevel]->rooms[0]->enemies[i].isAlive = true;
+                    boss_encounter_begin(&game->levels[game->currentLevel]->rooms[0]->enemies[i]);
                 }
             }
             // Mix_PauseMusic();
@@ -4794,51 +4875,17 @@ void after_move(WINDOW *game_win){
             is_last_room = 1;
             effects = Mix_LoadMUS("./Base_Sounds/BeforeBattle.mp3");
             Mix_PlayMusic(effects, 1);
-            wattron(game_win, COLOR_PAIR(10));
-            mvwprintw(game_win, 18, 50, "┌────────────────────────────────────────┐");
-            mvwprintw(game_win, 19, 50, "│Final Battle starts within 5 seconds!   │");
-            mvwprintw(game_win, 20, 50, "└────────────────────────────────────────┘");
-            wattroff(game_win, COLOR_PAIR(10));
-            wrefresh(game_win);
-            sleep(1);
-            wattron(game_win, COLOR_PAIR(8));
-            mvwprintw(game_win, 18, 50, "┌────────────────────────────────────────┐");
-            mvwprintw(game_win, 19, 50, "│Final Battle starts within 4 seconds!   │");
-            mvwprintw(game_win, 20, 50, "└────────────────────────────────────────┘");
-            wattroff(game_win, COLOR_PAIR(8));
-            wrefresh(game_win);
-            sleep(1);
-            wattron(game_win, COLOR_PAIR(14));
-            mvwprintw(game_win, 18, 50, "┌────────────────────────────────────────┐");
-            mvwprintw(game_win, 19, 50, "│Final Battle starts within 3 seconds!   │");
-            mvwprintw(game_win, 20, 50, "└────────────────────────────────────────┘");
-            wattroff(game_win, COLOR_PAIR(14));
-            wrefresh(game_win);
-            sleep(1);
-            wattron(game_win, COLOR_PAIR(6));
-            mvwprintw(game_win, 18, 50, "┌────────────────────────────────────────┐");
-            mvwprintw(game_win, 19, 50, "│Final Battle starts within 2 seconds!   │");
-            mvwprintw(game_win, 20, 50, "└────────────────────────────────────────┘");
-            wattroff(game_win, COLOR_PAIR(6));
-            wrefresh(game_win);
-            sleep(1);
-            wattron(game_win, COLOR_PAIR(17));
-            mvwprintw(game_win, 18, 50, "┌────────────────────────────────────────┐");
-            mvwprintw(game_win, 19, 50, "│Final Battle starts within 1 second!    │");
-            mvwprintw(game_win, 20, 50, "└────────────────────────────────────────┘");
-            wattroff(game_win, COLOR_PAIR(17));
-            wrefresh(game_win);
-            sleep(1);
-            wattron(game_win, COLOR_PAIR(17));
-            mvwprintw(game_win, 18, 50, "┌────────────────────────────────────────┐");
-            mvwprintw(game_win, 19, 50, "│           And now, begins...           │");
-            mvwprintw(game_win, 20, 50, "└────────────────────────────────────────┘");
-            wattroff(game_win, COLOR_PAIR(17));
-            wrefresh(game_win);
-            sleep(2);
-            mvwprintw(game_win, 18, 50, "                                          ");
-            mvwprintw(game_win, 19, 50, "                                          ");
-            mvwprintw(game_win, 20, 50, "                                          ");
+            draw_last_room(game_win,game->levels[game->currentLevel]->rooms[0],0);
+            int banner_y=LINES-35,banner_x=COLS-60;
+            if(banner_y<4)banner_y=4;
+            for(int seconds=3;seconds>0;seconds--){
+                wattron(game_win,A_BOLD|COLOR_PAIR(12));
+                mvwaddstr(game_win,banner_y,banner_x,"╭──────────────────────────────────────────╮");
+                mvwprintw(game_win,banner_y+1,banner_x,"│       FINAL BATTLE  ·  begins in %d        │",seconds);
+                mvwaddstr(game_win,banner_y+2,banner_x,"╰──────────────────────────────────────────╯");
+                wattroff(game_win,A_BOLD|COLOR_PAIR(12));wrefresh(game_win);napms(1000);music_tick();
+            }
+            for(int y=0;y<3;y++)mvwhline(game_win,banner_y+y,banner_x,' ',44);
             effects = Mix_LoadMUS("./Base_Sounds/Invader.mp3");
             Mix_PlayMusic(effects, 1);
             draw_last_room(game_win, game->levels[game->currentLevel]->rooms[0], 0);
@@ -4858,6 +4905,7 @@ void after_move(WINDOW *game_win){
     }
 }
 void enemy_be_attaked(int y, int x, WINDOW *game_win){
+    if(escape_check||run_finished)return;
     if(is_enemy(y, x)){
         for(int i = 0; i < game->levels[game->currentLevel]->rooms[game->player->room_num]->enemyCount; i++){
             if(game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].cord.x == x 
@@ -4873,7 +4921,7 @@ void enemy_be_attaked(int y, int x, WINDOW *game_win){
                     mvwprintw(game_win, 3, 82, "                                                                      ");
                     if(game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].type == 'i'){
                         print_last_dragon(game_win);
-                        mvwprintw(game_win, 3, 82, "You dealt %d damage and killed the final boss🏆", game->player->currentWeapon.damage);
+                        mvwprintw(game_win, 3, 82, UI_TEXT("You dealt %d damage and killed the final boss🏆","You dealt %d damage and killed the final boss★"), game->player->currentWeapon.damage);
                         game->player->points += 40000 * difficulty_efficiency;
                         game->player->gold += 1000;
                         draw_last_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], 0);
@@ -4884,10 +4932,10 @@ void enemy_be_attaked(int y, int x, WINDOW *game_win){
                         return;
                     }
                     else{
-                        mvwprintw(game_win, 3, 82, "You dealt %d damage and killed %s💥", game->player->currentWeapon.damage, game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].name);
+                        mvwprintw(game_win, 3, 82, UI_TEXT("You dealt %d damage and killed %s💥","You dealt %d damage and killed %s✧"), game->player->currentWeapon.damage, game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].name);
                     }
-                    game->whole_map[game->currentLevel][game->player->currentWeapon.damage, game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].cord.y]
-                    [game->player->currentWeapon.damage, game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].cord.x].item = '.';
+                    game->whole_map[game->currentLevel][game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].cord.y]
+                    [game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].cord.x].item = '.';
                     wattroff(game_win, COLOR_PAIR(color_pair_num));
                 }
                 else{
@@ -4903,12 +4951,106 @@ void enemy_be_attaked(int y, int x, WINDOW *game_win){
                         first_attack = 1;
                     }
                     mvwprintw(game_win, 3, 82, "                                                                          ");
-                    mvwprintw(game_win, 3, 82, "You dealt %d damage to %s🔥", game->player->currentWeapon.damage, game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].name);
+                    mvwprintw(game_win, 3, 82, UI_TEXT("You dealt %d damage to %s🔥","You dealt %d damage to %s✦"), game->player->currentWeapon.damage, game->levels[game->currentLevel]->rooms[game->player->room_num]->enemies[i].name);
                     wattroff(game_win, COLOR_PAIR(color_pair_num));
                 }
             }
         }
     }
+}
+int mouse_attack_event(const MEVENT *event);
+static int mouse_aim_x=0,mouse_aim_y=-1;
+int ranged_key_vector(int key,int *dx,int *dy){
+    *dx=*dy=0;
+    switch(key){
+    case 'w':case 'W':case KEY_UP:*dy=-1;break;
+    case 's':case 'S':case KEY_DOWN:*dy=1;break;
+    case 'a':case 'A':case KEY_LEFT:*dx=-1;break;
+    case 'd':case 'D':case KEY_RIGHT:*dx=1;break;
+    case 'q':case 'Q':case KEY_HOME:*dx=-1;*dy=-1;break;
+    case KEY_PPAGE:*dx=1;*dy=-1;break;
+    case 'z':case 'Z':case KEY_END:*dx=-1;*dy=1;break;
+    case 'c':case 'C':case KEY_NPAGE:*dx=1;*dy=1;break;
+    default:return 0;
+    }return 1;
+}
+static int ranged_passable(int y,int x){
+    if(!valid_move_check(y,x))return 0;
+    int c=game->whole_map[game->currentLevel][y][x].item;
+    return c!='+'&&c!='?'&&c!='L';
+}
+static void fire_ranged(WINDOW *win){
+    Player *p=game->player;Room *room=game->levels[game->currentLevel]->rooms[p->room_num];
+    int index=p->currentWeapon.type=='d'?1:p->currentWeapon.type=='w'?2:3;
+    if(p->currentWeapon.count<=0){mvwaddstr(win,3,82,"Out of ammo. Tab: choose a weapon.       ");move_or_not=0;return;}
+    if(game->currentLevel==6){mvwaddstr(win,3,82,"No ranged attack in battle room!                  ");move_or_not=0;return;}
+    if(game->whole_map[game->currentLevel][p->cord.y][p->cord.x].item=='#'){
+        mvwaddstr(win,3,82,"No attack in corridors!                            ");move_or_not=0;return;
+    }
+    int dx=0,dy=0,key=direction;
+    MEVENT target=mouse_event;
+    if(move_click==' '){
+        mvwaddstr(win,3,82,index==2?"Wand: arrows shoot (1); WASD ride magic (2). Esc cancels":"Aim: arrows / WASD / diagonal keys / click. Esc: cancel");wrefresh(win);
+        for(;;){
+            key=music_getch(win);
+            if(key==27){move_or_not=0;mvwaddstr(win,3,82,"Aim cancelled.                                         ");return;}
+            if(key==KEY_MOUSE){if(getmouse(&target)==OK&&mouse_attack_event(&target))break;}
+            else if(ranged_key_vector(key,&dx,&dy))break;
+        }
+    }else if(move_click==KEY_MOUSE)key=KEY_MOUSE;
+    if(key==KEY_MOUSE){
+        dx=target.x-p->cord.x;dy=target.y-p->cord.y;
+        if(!dx&&!dy){move_or_not=0;return;}
+        mouse_aim_x=dx;mouse_aim_y=dy;direction=0;
+    }else if(key==0){dx=mouse_aim_x;dy=mouse_aim_y;}
+    else if(!ranged_key_vector(key,&dx,&dy)){move_or_not=0;return;}
+    else direction=key;
+    /* Letter aiming carries the wizard with the spell; arrow/mouse aiming stays ranged. */
+    int ride=index==2&&((key>='a'&&key<='z')||(key>='A'&&key<='Z'));
+    int cost=ride?2:1;
+    if(p->currentWeapon.count<cost){
+        mvwaddstr(win,3,82,"Magic ride needs 2 charges. Use arrows to shoot for 1. ");move_or_not=0;return;
+    }
+    int range=index==2?10:5,damage=index==1?12:index==2?15:5;
+    if(p->Power_effect>0)damage*=2;
+    p->currentWeapon.damage=damage;p->currentWeapon.range=range;p->currentWeapon.move=0;
+    int x=p->cord.x,y=p->cord.y,ax=abs(dx),ay=abs(dy),sx=(dx>0)-(dx<0),sy=(dy>0)-(dy<0),err=ax-ay;
+    int hit=0,travelled=0;
+    /* Check the first step before spending a charge. */
+    for(int step=0;step<range;step++){
+        int nx=x,ny=y,e2=2*err;
+        if(e2>-ay){err-=ay;nx+=sx;}if(e2<ax){err+=ax;ny+=sy;}
+        if(!ranged_passable(ny,nx)||(nx!=x&&ny!=y&&(!ranged_passable(y,nx)||!ranged_passable(ny,x))))break;
+        if(!travelled){
+            p->currentWeapon.count-=cost;
+            if(p->weapons[index].type==p->currentWeapon.type)p->weapons[index].count=p->currentWeapon.count;
+            if(!strcmp(selected_music,"./Base_Sounds/silent.wav")&&game->currentLevel!=game->levelCount-1){
+                Mix_Music *effect=index==1?dagger_effect:index==2?wand_effect:arrow_effect;
+                if(effect)Mix_PlayMusic(effect,0);
+            }
+        }
+        x=nx;y=ny;travelled++;p->currentWeapon.move=travelled;
+        if(is_enemy(y,x)){enemy_be_attaked(y,x,win);if(escape_check||run_finished)return;hit=1;break;}
+        if(ride)p->cord=(Point){x,y};
+        wattron(win,A_BOLD|COLOR_PAIR(12));mvwaddstr(win,y,x,index==2?"✦":"•");wattroff(win,A_BOLD|COLOR_PAIR(12));
+        wrefresh(win);napms(18);
+        if(in_nightmare)draw_nightmare_room(win,room,p->room_num);
+        else draw_ranged_attacked_room(win,room,p->room_num,sx,sy);
+        draw_player_avatar(win,p->cord.y,p->cord.x);
+    }
+    if(!travelled){mvwaddstr(win,3,82,"Blocked shot: aim away from the wall.                ");move_or_not=0;return;}
+    if(!hit){
+        Weapon *grown=realloc(room->weapons,(room->weaponCount+1)*sizeof(Weapon));
+        if(grown){room->weapons=grown;Weapon drop=p->currentWeapon;drop.count=1;drop.move=0;drop.cord=(Point){x,y};drop.isUsed=false;
+            room->weapons[room->weaponCount++]=drop;
+            /* Keep stairs, code panels and other loot beneath the recoverable projectile. */
+            int c=game->whole_map[game->currentLevel][y][x].item;
+            if(c=='.'||c=='#')game->whole_map[game->currentLevel][y][x].item=index==1?'2':index==2?'3':'4';
+        }
+    }
+    if(in_nightmare)draw_nightmare_room(win,room,p->room_num);
+    else draw_ranged_attacked_room(win,room,p->room_num,sx,sy);
+    draw_player_avatar(win,p->cord.y,p->cord.x);wrefresh(win);
 }
 void attacking(WINDOW *game_win){
     if(game->levels[game->currentLevel]->rooms[game->player->room_num]->type == 's'){
@@ -4954,6 +5096,7 @@ void attacking(WINDOW *game_win){
         enemy_be_attaked(game->player->cord.y + 1, game->player->cord.x - 1, game_win);
         enemy_be_attaked(game->player->cord.y - 1, game->player->cord.x + 1, game_win);
         enemy_be_attaked(game->player->cord.y - 1, game->player->cord.x - 1, game_win);
+        if(escape_check||run_finished)return;
         draw_attacked_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], game->player->room_num);
         if(game->player->currentWeapon.type == 's' && game->player->currentWeapon.count >= 4 && (move_click == 'E' || move_click == 'e' || move_click == KEY_MOUSE)){
             int dx = 0;
@@ -4970,7 +5113,7 @@ void attacking(WINDOW *game_win){
             else if(move_direction == KEY_RIGHT || move_direction == 'd' || move_direction == 'D'){
                 dx = 1;
             }
-            if(valid_move_check(game->player->cord.y + 2 * dy, game->player->cord.x + 2 * dx)){
+            if(player_step_valid(game->player->cord.y + 2 * dy, game->player->cord.x + 2 * dx)){
                 game->player->cord.x += 2 * dx;
                 game->player->cord.y += 2 * dy;
             }
@@ -4990,175 +5133,23 @@ void attacking(WINDOW *game_win){
             else if(move_direction == KEY_RIGHT || move_direction == 'd' || move_direction == 'D'){
                 dx = 1;
             }
-            if(valid_move_check(game->player->cord.y + dy, game->player->cord.x + dx)){
+            if(player_step_valid(game->player->cord.y + dy, game->player->cord.x + dx)){
                 game->player->cord.x += dx;
                 game->player->cord.y += dy;
             }
         }
     }
     else{
-        if(game->player->currentWeapon.count <= 0){
-            wattron(game_win, COLOR_PAIR(color_pair_num));
-            mvwprintw(game_win, 3, 82, "                                                                                 ");
-            mvwprintw(game_win, 3, 82, "You're out of ammo! Change your weapon...");
-            move_or_not = 0;
-            wattroff(game_win, COLOR_PAIR(color_pair_num));
-            return;
-        }
-        else if(game->currentLevel == 6){
-            mvwprintw(game_win, 3, 82, "                                                                                 ");
-            mvwprintw(game_win, 3, 82, "No ranged attack in battle room!");
-            move_or_not = 0;
-            return;
-        }
-        else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
-            mvwprintw(game_win, 3, 82, "                                                                                 ");
-            mvwprintw(game_win, 3, 82, "No attack in corridors!");
-            move_or_not = 0;
-            return;
-        }
-        if(move_click == ' '){
-            direction = wgetch(game_win);
-        }
-        game->player->currentWeapon.move = 0;
-        if(game->player->currentWeapon.type == 'd'){
-            if(!strcmp(selected_music, "./Base_Sounds/silent.wav") && game->currentLevel != game->levelCount - 1){
-                Mix_PlayMusic(dagger_effect, 1);
-            }
-            game->player->currentWeapon.damage = 12;
-            game->player->currentWeapon.range = 5;
-        }
-        else if(game->player->currentWeapon.type == 'w'){
-            if(!strcmp(selected_music, "./Base_Sounds/silent.wav") && game->currentLevel != game->levelCount - 1){
-                Mix_PlayMusic(wand_effect, 1);
-            }
-            game->player->currentWeapon.damage = 15;
-            game->player->currentWeapon.range = 10;
-        }
-        else if(game->player->currentWeapon.type == 'a'){
-            if(!strcmp(selected_music, "./Base_Sounds/silent.wav") && game->currentLevel != game->levelCount - 1){
-                Mix_PlayMusic(arrow_effect, 1);
-            }
-            game->player->currentWeapon.damage = 5;
-            game->player->currentWeapon.range = 5;
-        }
-        if(game->player->Power_effect > 0){
-            game->player->currentWeapon.damage *= 2;
-        }
-        int dx = 0;
-        int dy = 0;
-        if(direction == KEY_UP || direction == 'w' || direction == 'W'){
-            dy = -1;
-        }
-        else if(direction == KEY_DOWN || direction == 's' || direction == 'S'){
-            dy = 1;
-        }
-        else if(direction == KEY_LEFT || direction == 'a' || direction == 'A'){
-            dx = -1;
-        }
-        else if(direction == KEY_RIGHT || direction == 'd' || direction == 'D'){
-            dx = 1;
-        }
-        else{
-            return;
-        }
-        int x = game->player->cord.x + dx, y = game->player->cord.y + dy;
-        // if(valid_move_check(y, x) 
-        // // && game->whole_map[game->currentLevel][y][x].item != '+'
-        // // && game->whole_map[game->currentLevel][y][x].item != '?'
-        // // && game->whole_map[game->currentLevel][y][x].item != 'L'
-        // // && game->whole_map[game->currentLevel][y][x].item != '#'
-        // ){
-            game->player->currentWeapon.count--;
-            if(game->player->currentWeapon.type == 'w' && direction <= 'z' && direction >= 'A'){
-                game->player->currentWeapon.count--;
-            }
-            for(int i = 1; i < 4; i++){
-                if(game->player->weapons[i].type == game->player->currentWeapon.type){
-                    game->player->weapons[i].count--;
-                    if(game->player->currentWeapon.type == 'w' && direction <= 'z' && direction >= 'A'){
-                        game->player->weapons[i].count--;
-                    }
-                }
-            }
-        // }
-        while(1){
-            if(valid_move_check(y, x) 
-            && game->whole_map[game->currentLevel][y][x].item != '+'
-            && game->whole_map[game->currentLevel][y][x].item != '?'
-            && game->whole_map[game->currentLevel][y][x].item != 'L'
-            && game->whole_map[game->currentLevel][y][x].item != '#'
-            && game->player->currentWeapon.move < game->player->currentWeapon.range){
-                if(is_enemy(y, x)){
-                    enemy_be_attaked(y, x, game_win);
-                    draw_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], game->player->room_num);
-                    break;
-                }
-                else{
-                    wattron(game_win, COLOR_PAIR(color_pair_num));
-                    if(dx == 1){
-                        mvwprintw(game_win, y, x, "→");//→➵
-                    }
-                    else if(dx == -1){
-                        mvwprintw(game_win, y, x, "←");
-                    }
-                    else if(dy == 1){
-                        mvwprintw(game_win, y, x, "↓");
-                    }
-                    else if(dy == -1){
-                        mvwprintw(game_win, y, x, "↑");
-                    }
-                    mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
-                    wattroff(game_win, COLOR_PAIR(color_pair_num));
-                    wrefresh(game_win);
-                    if(in_nightmare){
-                        draw_nightmare_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], game->player->room_num);
-                    }
-                    else{
-                        draw_ranged_attacked_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], game->player->room_num, dx, dy);
-                    }
-                    usleep(15000);
-                    if(game->player->currentWeapon.type == 'w' && direction <= 'z' && direction >= 'A'){
-                        game->player->cord.x = x;
-                        game->player->cord.y = y;
-                    }
-                    x += dx;
-                    y += dy;
-                }
-            }
-            else{
-                x -= dx;
-                y -= dy;
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->weapons[game->levels[game->currentLevel]->rooms[game->player->room_num]->weaponCount].count = 1;
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->weapons[game->levels[game->currentLevel]->rooms[game->player->room_num]->weaponCount].type = game->player->currentWeapon.type;
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->weapons[game->levels[game->currentLevel]->rooms[game->player->room_num]->weaponCount].cord.x = x;
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->weapons[game->levels[game->currentLevel]->rooms[game->player->room_num]->weaponCount].cord.y = y;
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->weapons[game->levels[game->currentLevel]->rooms[game->player->room_num]->weaponCount].isUsed = false;
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->weaponCount++;
-                if(game->player->currentWeapon.type == 'd'){
-                    game->whole_map[game->currentLevel][y][x].item = '2';
-                }
-                if(game->player->currentWeapon.type == 'w'){
-                    game->whole_map[game->currentLevel][y][x].item = '3';
-                }
-                if(game->player->currentWeapon.type == 'a'){
-                    game->whole_map[game->currentLevel][y][x].item = '4';
-                }
-                if(in_nightmare){
-                    draw_nightmare_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], game->player->room_num);
-                }
-                else{
-                    draw_ranged_attacked_room(game_win, game->levels[game->currentLevel]->rooms[game->player->room_num], game->player->room_num, dx, dy);
-                }
-                break;
-            }
-            game->player->currentWeapon.move++;
-        }
+        fire_ranged(game_win);
     }
 }
+
 void guid(WINDOW *game_win){
+    if(ui_old_visuals){legacy_guid(game_win);return;}
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width * 3 / 4 - BORDER_PADDING;
@@ -5345,7 +5336,7 @@ void guid(WINDOW *game_win){
         mvwprintw(game_win, map_height - 10 - b, map_width - 54 - a, "│ When you see a '<' or '>' sign; it means that│");
         mvwprintw(game_win, map_height - 9 - b, map_width - 54 - a, "│ you are in a stair room and you can go on the│");
         mvwprintw(game_win, map_height - 8 - b, map_width - 54 - a, "│ stair sign and press the same button of the  |");
-        mvwprintw(game_win, map_height - 7 - b, map_width - 54 - a, "│ stair and move to next/previous level. '⛩' _\\");
+        mvwprintw(game_win, map_height - 7 - b, map_width - 54 - a, "│ stair and move to next/previous level. '≡' _\\");
         mvwprintw(game_win, map_height - 6 - b, map_width - 54 - a, "╰─────────────────────────────────────────────╯ \\_");
     }
     else if(first_spell == 1){
@@ -5368,18 +5359,21 @@ void guid(WINDOW *game_win){
         int b = -1;
         first_weapon = -1;
         mvwprintw(game_win, map_height - 11 - b, map_width - 54 - a, "╭────────────────────────────────────────────╮");
-        mvwprintw(game_win, map_height - 10 - b, map_width - 54 - a, "│ Weapons are used to attack monsters to kill│");
-        mvwprintw(game_win, map_height - 9 - b, map_width - 54 - a, "│ them. They have two types, ranged and melee│");
-        mvwprintw(game_win, map_height - 8 - b, map_width - 54 - a, "│ You can use choose by pressing \"TAB\" button|");
-        mvwprintw(game_win, map_height - 7 - b, map_width - 54 - a, "│ to open your inventory and select them.   _\\");
+        mvwprintw(game_win, map_height - 10 - b, map_width - 54 - a, "│ RANGED: first press SPACE to aim.          │");
+        mvwprintw(game_win, map_height - 9 - b, map_width - 54 - a, "│ Then press an arrow / WASD key to FIRE.   │");
+        mvwprintw(game_win, map_height - 8 - b, map_width - 54 - a, "│ WAND: arrows shoot 1; WASD rides for 2.   │");
+        mvwprintw(game_win, map_height - 7 - b, map_width - 54 - a, "│ TAB: equipment. E: repeat. Esc: cancel.   _\\");
         mvwprintw(game_win, map_height - 6 - b, map_width - 54 - a, "╰───────────────────────────────────────────╯ \\_");
     }
     wattroff(game_win, COLOR_PAIR(color_pair_num));
     wattroff(game_win, COLOR_PAIR(14));
 }
 void quoting(WINDOW *game_win){
+    if(ui_old_visuals){legacy_quoting(game_win);return;}
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width * 3 / 4 - BORDER_PADDING;
@@ -5678,7 +5672,46 @@ void quoting(WINDOW *game_win){
     }
     wattroff(game_win, COLOR_PAIR(3));
 }
+static void draw_status_hud(WINDOW *win) {
+    if(ui_old_visuals){legacy_messaging(win);return;}
+    int h=getmaxy(win), y=h-11, x=4, width=77;
+    attr_t attrs;short pair;wattr_get(win,&attrs,&pair,NULL);
+    wattrset(win,COLOR_PAIR(10));
+    for(int r=0;r<10;r++) mvwhline(win,y+r,x,' ',width);
+    wattron(win,COLOR_PAIR(3));
+    mvwaddstr(win,y,x,"┌");mvwhline(win,y,x+1,ACS_HLINE,width-2);mvwaddstr(win,y,x+width-1,"┐");
+    mvwaddstr(win,y+9,x,"└");mvwhline(win,y+9,x+1,ACS_HLINE,width-2);mvwaddstr(win,y+9,x+width-1,"┘");
+    for(int r=1;r<9;r++){mvwaddstr(win,y+r,x,"│");mvwaddstr(win,y+r,x+width-1,"│");}
+    mvwaddstr(win,y,x+3," ADVENTURER ");wattroff(win,COLOR_PAIR(3));
+    const char *weapon="Mace";
+    switch(game->player->currentWeapon.type){case 'd':weapon="Dagger";break;case 'w':weapon="Magic Wand";break;case 'a':weapon="Bow";break;case 's':weapon="Sword";break;}
+    wattron(win,COLOR_PAIR(12));
+    mvwprintw(win,y+2,x+3,"Weapon  %-12s   Stock / rank  %d",weapon,game->player->currentWeapon.count);
+    wattroff(win,COLOR_PAIR(12));
+    const char *labels[]={"HEALTH","SHIELD","FOOD"};
+    int values[]={game->player->health,game->player->shield,game->player->foodCount};
+    short colors[]={6,3,7};
+    for(int r=0;r<3;r++) {
+        int value=values[r],fill=value<0?0:value>100?20:value/5;
+        wattron(win,COLOR_PAIR(colors[r]));
+        mvwprintw(win,y+4+r,x+3,"%-7s %3d  [",labels[r],value);
+        for(int c=0;c<20;c++)mvwaddstr(win,y+4+r,x+17+c,c<fill?"━":"·");
+        mvwaddstr(win,y+4+r,x+37,"]");wattroff(win,COLOR_PAIR(colors[r]));
+    }
+    wattron(win,COLOR_PAIR(12));mvwprintw(win,y+4,x+43,"Gold   %d",game->player->gold);
+    mvwprintw(win,y+5,x+43,"Keys   %d",game->player->acientKey);wattroff(win,COLOR_PAIR(12));
+    wattron(win,COLOR_PAIR(17));
+    if(game->player->currentWeapon.type=='w')
+        mvwaddstr(win,y+7,x+3,"WAND: SPACE, then arrows: shoot 1 | WASD: magic ride 2");
+    else if(game->player->currentWeapon.type=='d'||game->player->currentWeapon.type=='a')
+        mvwaddstr(win,y+7,x+3,"RANGED: 1 SPACE to aim  2 Arrow/WASD to fire  | E repeat");
+    mvwprintw(win,y+8,x+3,"Effects (turns)   Speed %d   Power %d   Healing %d",game->player->Speed_effect,game->player->Power_effect,game->player->Health_effect);
+    wattroff(win,COLOR_PAIR(17));
+    wattr_set(win,attrs,pair,NULL);
+}
+
 void messaging(WINDOW *game_win){
+    if(ui_old_visuals){legacy_messaging(game_win);return;}
     { //Updating weapon
         if(game->player->currentWeapon.type == 'd'){
             game->player->currentWeapon = game->player->weapons[1];
@@ -5710,22 +5743,24 @@ void messaging(WINDOW *game_win){
         long long pt = difftime(mid_time, start_time) * 5 * difficulty_efficiency;
         mvwprintw(game_win, 2, 5, "                                                                               ");
         wattron(game_win, COLOR_PAIR(7));
-        mvwprintw(game_win, 2, 5, "Current level: %d🟢 Completed level: %d✅ Total points: %lldXP", game->currentLevel + 1, game->unlockedLevel, pointss + game->player->gold * 10 + pt);
+        mvwprintw(game_win, 2, 5, "Floor %d   |   Deepest %d   |   XP %lld", game->currentLevel + 1, game->unlockedLevel, pointss + game->player->gold * 10 + pt);
         wattroff(game_win, COLOR_PAIR(7));
         if(game->unlockedLevel == -1){
-            mvwprintw(game_win, 2, 5, "Current level: %d🟢 Completed level: %d✅ Total points: %lld", game->currentLevel + 1, 0, pointss + game->player->gold * 10 + pt);
+            mvwprintw(game_win, 2, 5, "Floor %d   |   Deepest %d   |   XP %lld", game->currentLevel + 1, 0, pointss + game->player->gold * 10 + pt);
         }
         else{
             if((game->currentLevel == game->levelCount - 1 && !is_last_room) || game->currentLevel == 6){
-                mvwprintw(game_win, 2, 5, "Current level: %d🟢 Completed level: %d✅ Total points: %lldXP Enemy Left: %d❌", game->currentLevel + 1, game->unlockedLevel, pointss + game->player->gold * 10 + pt, game->levels[game->currentLevel]->rooms[0]->enemyLeft);
+                mvwprintw(game_win, 2, 5, "Floor %d   |   Deepest %d   |   XP %lld Enemy Left: %d❌", game->currentLevel + 1, game->unlockedLevel, pointss + game->player->gold * 10 + pt, game->levels[game->currentLevel]->rooms[0]->enemyLeft);
             }
             else{
-                mvwprintw(game_win, 2, 5, "Current level: %d🟢 Completed level: %d✅ Total points: %lld", game->currentLevel + 1, game->unlockedLevel, pointss + game->player->gold * 10 + pt);
+                mvwprintw(game_win, 2, 5, "Floor %d   |   Deepest %d   |   XP %lld", game->currentLevel + 1, game->unlockedLevel, pointss + game->player->gold * 10 + pt);
             }
         }
     }
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width * 3 / 4 - BORDER_PADDING;
@@ -5744,26 +5779,6 @@ void messaging(WINDOW *game_win){
             effects_count++;
         }
     }
-    { // Cleaning
-        mvwprintw(game_win, map_height - 11, 4, "                                                                                       ");
-        mvwprintw(game_win, map_height - 10, 4, "                                                                                       ");
-        mvwprintw(game_win, map_height - 9, 4, "                                                                                       ");
-        mvwprintw(game_win, map_height - 8, 4, "                                                                                       ");
-        mvwprintw(game_win, map_height - 7, 4, "                                                                                       ");
-        mvwprintw(game_win, map_height - 6, 4, "                                                                                       ");
-        for(int j = 0; j < 20; j++){
-            mvwprintw(game_win, map_height - 6, 5 + j, " ");
-            mvwprintw(game_win, map_height - 5, 5 + j, " ");
-            mvwprintw(game_win, map_height - 4, 5 + j, " ");
-        }
-        mvwprintw(game_win, map_height - 11, 5, "                                                                                       ");
-        mvwprintw(game_win, map_height - 10, 5, "                                                                                       ");
-        mvwprintw(game_win, map_height - 9, 5, "                                                                                       ");
-        mvwprintw(game_win, map_height - 8, 5, "                                                                                       ");
-        mvwprintw(game_win, map_height - 7, 5, "                                                                                       ");
-        mvwprintw(game_win, map_height - 2, 4, "                                                                                       ");
-        mvwprintw(game_win, map_height - 3, 4, "                                                                                       ");
-    }
     in_emoji_check();
     if(in_emoji == 0){
         if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
@@ -5772,147 +5787,23 @@ void messaging(WINDOW *game_win){
             && character != L'\U0000263A' && character != L'\U0000263B'
             && character != L'\U0000235F' && character != L'\U0000058D'
             && character != L'\U0000272F'
-            && valid_move_check(game->player->cord.y, game->player->cord.x + 1)){
-                mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc ", character);
+            && player_step_valid(game->player->cord.y, game->player->cord.x + 1)){
+                draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
             }
             else{
-                mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+                draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
             }
         }
         else{
             wattron(game_win, COLOR_PAIR(color_pair_num));
-            mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+            draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
             wattroff(game_win, COLOR_PAIR(color_pair_num));
         }
         if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
             wattroff(game_win, A_REVERSE | COLOR_PAIR(color_pair_num));
         }
     }
-    wattron(game_win, COLOR_PAIR(6));
-    { // Spell state
-        if(game->player->Speed_effect > 0){
-            wattron(game_win, COLOR_PAIR(19));
-            mvwprintw(game_win, map_height - 7 - effects_count, 5 + spacing, "You have Speed effect left for %d moves.🏃 ", game->player->Speed_effect);
-            wattroff(game_win, COLOR_PAIR(19));
-        }
-        if(game->player->Power_effect > 0){
-            wattron(game_win, COLOR_PAIR(17));
-            int a = 0;
-            if(game->player->Health_effect == 0){
-                a++;
-            }
-            mvwprintw(game_win, map_height - 9 + a, 5 + spacing, "You have Strength effect left for %d moves.💪", game->player->Power_effect);
-            wattroff(game_win, COLOR_PAIR(17));
-        }
-        if(game->player->Health_effect > 0){
-            wattron(game_win, COLOR_PAIR(7));
-            mvwprintw(game_win, map_height - 8, 5 + spacing, "You have healing effect left for %d moves.💟", game->player->Health_effect);
-            wattroff(game_win, COLOR_PAIR(7));
-        }
-    }
-    { // Weapon state
-        wattron(game_win, COLOR_PAIR(14));
-        if(game->player->currentWeapon.type == 'm'){
-            mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Mace⚒");
-        }
-        else if(game->player->currentWeapon.type == 'd'){
-            mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Dagger %d🗡", game->player->currentWeapon.count);
-        }
-        else if(game->player->currentWeapon.type == 'w'){
-            mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Magic Wand %d⚚", game->player->currentWeapon.count);
-        }
-        else if(game->player->currentWeapon.type == 'a'){
-            mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Bow and Arrow🏹 %d➳", game->player->currentWeapon.count);
-        }
-        else if(game->player->currentWeapon.type == 's'){
-            if(game->player->currentWeapon.count == 1){
-                mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Sword⚔ I");
-            }
-            if(game->player->currentWeapon.count == 2){
-                mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Sword⚔ II");
-            }
-            if(game->player->currentWeapon.count == 3){
-                mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Sword⚔ III");
-            }
-            if(game->player->currentWeapon.count == 4){
-                mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Sword⚔ IV");
-            }
-            if(game->player->currentWeapon.count == 5){
-                mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon: Sword⚔ V");
-            }
-        }
-        wattroff(game_win, COLOR_PAIR(14));
-        wattron(game_win, COLOR_PAIR(3));
-        mvwprintw(game_win, map_height - 7, 5 + spacing, "Current weapon:");
-        wattroff(game_win, COLOR_PAIR(3));
-    }
-    { // Health and Shield state
-        int a = 0;
-        if(in_spell){
-            for(int j = 0; j < game->player->health / 10; j++){
-                wchar_t heart = L'❤';
-                mvwprintw(game_win, map_height - 6, 5 + spacing + 2*j, "💜");
-            }
-            if((game->player->health + 5) % 10 == 0){
-                a = 1;
-                mvwprintw(game_win, map_height - 6, 4 + spacing + 2*game->player->health / 10, "🍆");
-            }
-        }
-        else if(game->levels[game->currentLevel]->rooms[game->player->room_num]->type == 'r'){
-            for(int j = 0; j < game->player->health / 10; j++){
-                mvwprintw(game_win, map_height - 6, 5 + spacing + 2*j, "💙");
-            }
-            if((game->player->health + 5) % 10 == 0){
-                a = 1;
-                mvwprintw(game_win, map_height - 6, 4 + spacing + 2*game->player->health / 10, "💧");
-            }
-        }
-        else if(game->levels[game->currentLevel]->rooms[game->player->room_num]->type == 's'){
-            for(int j = 0; j < game->player->health / 10; j++){
-                wchar_t heart = L'❤';
-                mvwprintw(game_win, map_height - 6, 5 + spacing + 2*j, "💚");
-            }
-            if((game->player->health + 5) % 10 == 0){
-                a = 1;
-                mvwprintw(game_win, map_height - 6, 4 + spacing + 2*game->player->health / 10, "🥒");
-            }
-        }
-        else{
-            wattron(game_win, COLOR_PAIR(6));
-            for(int j = 0; j < game->player->health / 10; j++){
-                wchar_t heart = L'❤';
-                mvwprintw(game_win, map_height - 6, 5 + spacing + 2*j, "❤");
-            }
-            if((game->player->health + 5) % 10 == 0){
-                a = 1;
-                mvwprintw(game_win, map_height - 6, 4 + spacing + 2*game->player->health / 10, "💔");
-            }
-        }
-        wattroff(game_win, COLOR_PAIR(6));
-        wattron(game_win, COLOR_PAIR(19));
-        for(int j = 0; j < game->player->shield / 10; j++){
-            mvwprintw(game_win, map_height - 6, 5 + 2*game->player->health / 10 + spacing + 2*j + a, "🌌");
-        }
-        if((game->player->shield + 5) % 10 == 0){
-            mvwprintw(game_win, map_height - 6, 4 + spacing + 2*game->player->shield / 10 + 2*game->player->health / 10 + a, "🌀");
-        }
-        wattroff(game_win, COLOR_PAIR(19));
-    }
-    { // Food and Gold state
-        for(int j = 0; j < game->player->foodCount / 10; j++){
-            mvwprintw(game_win, map_height - 5 + j / 10, 5 + spacing + 2*j - 2*(j/10)*10, "🍖");
-        }
-        if((game->player->foodCount + 5) % 10 == 0){
-            mvwprintw(game_win,  map_height - 5 + game->player->foodCount / 100, 4 + spacing + 2*game->player->foodCount / 10 - 2*(game->player->foodCount / 100)*10, "🥓");
-        }
-        if(poisonous_food_check == 1){
-            mvwprintw(game_win,  map_height - 5 + game->player->foodCount / 100, 5 + spacing + 2*game->player->foodCount / 10 - 2*(game->player->foodCount / 100)*10, "🥩");
-            poisonous_food_check = 0;
-        }
-        wattron(game_win, COLOR_PAIR(12));
-        mvwprintw(game_win, map_height - 4 + a, 4 + spacing, " 💰%d$", game->player->gold);
-        wattroff(game_win, COLOR_PAIR(12));
-    }
+    draw_status_hud(game_win);
     { //Borders
         wattron(game_win, COLOR_PAIR(15));
         mvwprintw(game_win, 1, 4, "┌───────Messages────────────────────────────────────────────────────────────┐");
@@ -5927,28 +5818,8 @@ void messaging(WINDOW *game_win){
         mvwprintw(game_win, 2, 81, "│");
         mvwprintw(game_win, 3, 81, "│");
         mvwprintw(game_win, 4, 81, "└───────────────────────────────────────────────────────────────────────────┘");
-        mvwprintw(game_win, map_height - 8 - effects_count, 4, "┌───────Bar─────────────────────────────────────────────────────────────────┐");
-        mvwprintw(game_win, map_height - 7 - effects_count, 80, "│");
-        mvwprintw(game_win, map_height - 6 - effects_count, 80, "│");
-        mvwprintw(game_win, map_height - 5 - effects_count, 80, "│");
-        mvwprintw(game_win, map_height - 4 - effects_count, 80, "│");
-        mvwprintw(game_win, map_height - 7 - effects_count, 4, "│");
-        mvwprintw(game_win, map_height - 6 - effects_count, 4, "│");
-        mvwprintw(game_win, map_height - 5 - effects_count, 4, "│");
-        mvwprintw(game_win, map_height - 4 - effects_count, 4, "│");
-        mvwprintw(game_win, map_height - 7, 80, "│");
-        mvwprintw(game_win, map_height - 6, 80, "│");
-        mvwprintw(game_win, map_height - 5, 80, "│");
-        mvwprintw(game_win, map_height - 4, 80, "│");
-        mvwprintw(game_win, map_height - 3, 80, "│");
-        mvwprintw(game_win, map_height - 7, 4, "│");
-        mvwprintw(game_win, map_height - 6, 4, "│");
-        mvwprintw(game_win, map_height - 5, 4, "│");
-        mvwprintw(game_win, map_height - 4, 4, "│");
-        mvwprintw(game_win, map_height - 3, 4, "│");
-        mvwprintw(game_win, map_height - 3 + a, 4, "└───────────────────────────────────────────────────────────────────────────┘");
         mvwprintw(game_win, 2, 159, "☰");
-        mvwprintw(game_win, 3, 158, "\u2009🎒");
+        mvwprintw(game_win, 3, 158, "\u2009▣");
         mvwhline(game_win, start_y - 1, start_x - 1, ACS_HLINE, map_width - 11);
         mvwhline(game_win, end_y, start_x - 1, ACS_HLINE, map_width - 11);
         mvwprintw(game_win, start_y - 1, start_x - 2, "╭");
@@ -6159,6 +6030,8 @@ void inventory_bar_menu() {
     WINDOW *inventory_bar_win;
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     // int max_height = game->player->spellCount > game->player->weaponCount ? game->player->spellCount : game->player->weaponCount;
     int max_height = 3;
     inventory_bar_win = newwin(20 + max_height, 34 + 12, map_height / 2 - 14, map_width / 2 - 17);
@@ -6177,9 +6050,9 @@ void inventory_bar_menu() {
     int inventory_size = sizeof(inventory_items) / sizeof(inventory_items[0]);
 
     char *options[] = {
-        "Consume Food🌱 ",
-        "Choose Weapon🏹 ",
-        "Use Spell🍷",
+        UI_TEXT("Consume Food🌱 ","Consume Food♣ "),
+        UI_TEXT("Choose Weapon🏹 ","Choose Weapon➳ "),
+        UI_TEXT("Use Spell🍷","Use Spell◆"),
         "Forge broken Ancientkey⚠ "
     };
     int options_size = sizeof(options) / sizeof(options[0]);
@@ -6199,18 +6072,18 @@ void inventory_bar_menu() {
         box(inventory_bar_win, 0, 0);
         wattroff(inventory_bar_win, COLOR_PAIR(color_pair_num));
         wattron(inventory_bar_win, COLOR_PAIR(3));
-        mvwprintw(inventory_bar_win, 1, 1, "%s: %d💗 Shield: %d💙", inventory_items[0], game->player->health, game->player->shield);
-        mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
-        mvwprintw(inventory_bar_win, 3, 1, "%s: %d📀", inventory_items[2], game->player->gold);
+        mvwprintw(inventory_bar_win, 1, 1, UI_TEXT("%s: %d💗 Shield: %d💙","%s: %d♥ Shield: %d♡"), inventory_items[0], game->player->health, game->player->shield);
+        mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
+        mvwprintw(inventory_bar_win, 3, 1, UI_TEXT("%s: %d📀","%s: %d¤"), inventory_items[2], game->player->gold);
         mvwprintw(inventory_bar_win, 4, 1, "%s: ", inventory_items[3]);
         int k = 11;
         for(int i = 0; i < 5; i++){
             if(i == 0){
-                mvwprintw(inventory_bar_win, 4, k, "Mace %d⚒", game->player->weapons[i].count);
+                mvwprintw(inventory_bar_win, 4, k, UI_TEXT("Mace %d⚒","Mace %d♠"), game->player->weapons[i].count);
                 k += 9;
             }
             else if(i == 1){
-                mvwprintw(inventory_bar_win, 4, k, "Dagger %d🗡", game->player->weapons[i].count);
+                mvwprintw(inventory_bar_win, 4, k, UI_TEXT("Dagger %d🗡","Dagger %d†"), game->player->weapons[i].count);
             }
             else if(i == 2){
                 mvwprintw(inventory_bar_win, 5, k, "Magic Wand %d⚚", game->player->weapons[i].count);
@@ -6221,7 +6094,7 @@ void inventory_bar_menu() {
                 k += 17;
             }
             else if(i == 4){
-                mvwprintw(inventory_bar_win, 5, k, "Sword %d⚔", game->player->weapons[i].count);
+                mvwprintw(inventory_bar_win, 5, k, UI_TEXT("Sword %d⚔","Sword %d†"), game->player->weapons[i].count);
             }
             int a = 0;
             if(game->player->weapons[i].count >= 10){
@@ -6232,18 +6105,18 @@ void inventory_bar_menu() {
                 k = 1;
             }
         }
-        // mvwprintw(inventory_bar_win, 4, k - 2, "  🔫");
+        // mvwprintw(inventory_bar_win, 4, k - 2, "  ➳");
         k = 9;
         mvwprintw(inventory_bar_win, 6, 1, "%s: ", inventory_items[4]);
         for(int i = 0; i < 3; i++){
             if(i == 0){
-                mvwprintw(inventory_bar_win, 6, k, "Speed %d🍾", game->player->spells[i].count);
+                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Speed %d🍾","Speed %d✦"), game->player->spells[i].count);
             }
             else if(i == 1){
-                mvwprintw(inventory_bar_win, 6, k, "Power %d🍷", game->player->spells[i].count);
+                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Power %d🍷","Power %d◆"), game->player->spells[i].count);
             }
             else if(i == 2){
-                mvwprintw(inventory_bar_win, 6, k, "Healing %d🍸", game->player->spells[i].count);
+                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Healing %d🍸","Healing %d✧"), game->player->spells[i].count);
             }
             int a = 0;
             if(game->player->spells[i].count >= 10){
@@ -6251,7 +6124,7 @@ void inventory_bar_menu() {
             }
             k += 10 + a; 
         }
-        // mvwprintw(inventory_bar_win, 5, k - 1, "  🥛");
+        // mvwprintw(inventory_bar_win, 5, k - 1, "  ♧");
         mvwprintw(inventory_bar_win, 7, 1, "Ancient Key: %d", game->player->acientKey);
         mvwprintw(inventory_bar_win, 8, 1, "Broken Ancient Key: %d", game->player->brokenAcientKey);
         wattroff(inventory_bar_win, COLOR_PAIR(3));
@@ -6287,7 +6160,7 @@ void inventory_bar_menu() {
         }
 
         wrefresh(inventory_bar_win);
-        ch = wgetch(inventory_bar_win);
+        ch = music_getch(inventory_bar_win);
 
         switch (ch) {
             case KEY_UP:
@@ -6296,6 +6169,7 @@ void inventory_bar_menu() {
             case KEY_DOWN:
                 selected_option = (selected_option + 1) % options_size;
                 break;
+            case 27:
             case '\t':
                 delwin(inventory_bar_win);
                 return;
@@ -6337,28 +6211,28 @@ void inventory_bar_menu() {
                         while(tab_check != 1){
                             mouse_save.x = mouse_event.x;
                             mouse_save.y = mouse_event.y;
-                            getmouse(&mouse_event);
+                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                             wattron(inventory_bar_win, COLOR_PAIR(7));
                             for(int i = 0; i < 4; i++){
                                 if (i == selected_item) {
                                     wattron(inventory_bar_win, A_REVERSE);
                                 }
                                 if(i == 0){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Special Food %d🍓 ", game->player->specialfoods[i].count);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Special Food %d🍓 ","● Special Food %d♣ "), game->player->specialfoods[i].count);
                                 }
                                 if(i == 1){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Power Food %d🍘 ", game->player->specialfoods[i].count);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Power Food %d🍘 ","● Power Food %d♧ "), game->player->specialfoods[i].count);
                                 }
                                 if(i == 2){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Speed Food %d🍟 ", game->player->specialfoods[i].count);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Speed Food %d🍟 ","● Speed Food %d♠ "), game->player->specialfoods[i].count);
                                 }
                                 if(i == 3){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Enchant spell with Rotten Food %d☣💱 ", game->player->specialfoods[i].count);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Enchant spell with Rotten Food %d☣💱 ","● Enchant spell with Rotten Food %d☣¤ "), game->player->specialfoods[i].count);
                                 }
                                 wattroff(inventory_bar_win, A_REVERSE);
                             }
                             wrefresh(inventory_bar_win);
-                            ch = wgetch(inventory_bar_win);
+                            ch = music_getch(inventory_bar_win);
                             switch (ch) {
                                 case KEY_UP:
                                     selected_item = (selected_item - 1 + items_size) % items_size;
@@ -6382,16 +6256,16 @@ void inventory_bar_menu() {
                                                 wattron(inventory_bar_win, A_REVERSE);
                                             }
                                             if(i == 0){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Special Food %d🍓 ", game->player->specialfoods[i].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Special Food %d🍓 ","● Special Food %d♣ "), game->player->specialfoods[i].count);
                                             }
                                             if(i == 1){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Power Food %d🍘 ", game->player->specialfoods[i].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Power Food %d🍘 ","● Power Food %d♧ "), game->player->specialfoods[i].count);
                                             }
                                             if(i == 2){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Speed Food %d🍟 ", game->player->specialfoods[i].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Speed Food %d🍟 ","● Speed Food %d♠ "), game->player->specialfoods[i].count);
                                             }
                                             if(i == 3){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Enchant spell with Rotten Food %d☣💱 ", game->player->specialfoods[i].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Enchant spell with Rotten Food %d☣💱 ","● Enchant spell with Rotten Food %d☣¤ "), game->player->specialfoods[i].count);
                                             }
                                             wattroff(inventory_bar_win, A_REVERSE);
                                         }
@@ -6415,7 +6289,7 @@ void inventory_bar_menu() {
                                                     }
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 food");
                                                     wattron(inventory_bar_win, COLOR_PAIR(3));
-                                                    mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                                    mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                                     wattroff(inventory_bar_win, COLOR_PAIR(3));
                                                 }
                                                 else{
@@ -6436,8 +6310,8 @@ void inventory_bar_menu() {
                                                 }
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 health      ");
                                                 wattron(inventory_bar_win, COLOR_PAIR(3));
-                                                mvwprintw(inventory_bar_win, 1, 1, "%s: %d💗", inventory_items[0], game->player->health);
-                                                mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                                mvwprintw(inventory_bar_win, 1, 1, UI_TEXT("%s: %d💗","%s: %d♥"), inventory_items[0], game->player->health);
+                                                mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                                 wattroff(inventory_bar_win, COLOR_PAIR(3));
                                             }
                                         }
@@ -6517,7 +6391,7 @@ void inventory_bar_menu() {
                                                 }
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 food");
                                                 wattron(inventory_bar_win, COLOR_PAIR(3));
-                                                mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                                mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                                 wattroff(inventory_bar_win, COLOR_PAIR(3));
                                             }
                                             else{
@@ -6538,8 +6412,8 @@ void inventory_bar_menu() {
                                             }
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 health");
                                             wattron(inventory_bar_win, COLOR_PAIR(3));
-                                            mvwprintw(inventory_bar_win, 1, 1, "%s: %d💗", inventory_items[0], game->player->health);
-                                            mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                            mvwprintw(inventory_bar_win, 1, 1, UI_TEXT("%s: %d💗","%s: %d♥"), inventory_items[0], game->player->health);
+                                            mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                             wattroff(inventory_bar_win, COLOR_PAIR(3));
                                         }
                                     }
@@ -6595,7 +6469,8 @@ void inventory_bar_menu() {
                                     }
                                 }
                                     break;
-                                case '\t':
+                                case 27:
+            case '\t':
                                     tab_check = 1;
                                     break;
                             }
@@ -6612,7 +6487,7 @@ void inventory_bar_menu() {
                         while (tab_check1 != 1) {
                             mouse_save.x = mouse_event.x;
                             mouse_save.y = mouse_event.y;
-                            getmouse(&mouse_event);
+                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                             mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
                             // mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                           ");
@@ -6627,7 +6502,7 @@ void inventory_bar_menu() {
                                     wattron(inventory_bar_win, A_REVERSE);
                                 }
                                 if(i == 0){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "%s🪓 ", weapon_types[i]);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, UI_TEXT("%s🪓 ","%s♠ "), weapon_types[i]);
                                 }
                                 else if(i == 1){
                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1 + i * 29, "%s➳ ", weapon_types[i]);
@@ -6635,7 +6510,7 @@ void inventory_bar_menu() {
                                 wattroff(inventory_bar_win, A_REVERSE);
                             }
                             wrefresh(inventory_bar_win);
-                            ch = wgetch(inventory_bar_win);
+                            ch = music_getch(inventory_bar_win);
     
                             switch (ch) {
                                 case KEY_RIGHT:
@@ -6656,7 +6531,7 @@ void inventory_bar_menu() {
                                                 wattron(inventory_bar_win, A_REVERSE);
                                             }
                                             if(i == 0){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "%s🪓 ", weapon_types[i]);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, UI_TEXT("%s🪓 ","%s♠ "), weapon_types[i]);
                                             }
                                             else if(i == 1){
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1 + i * 29, "%s➳ ", weapon_types[i]);
@@ -6673,7 +6548,7 @@ void inventory_bar_menu() {
                                             while (tab_check != 1) {
                                                 mouse_save.x = mouse_event.x;
                                                 mouse_save.y = mouse_event.y;
-                                                getmouse(&mouse_event);
+                                                if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -6686,15 +6561,15 @@ void inventory_bar_menu() {
                                                         wattron(inventory_bar_win, A_REVERSE);
                                                     }
                                                     if(i == 0){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                                     }
                                                     else if(i == 1){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                                     }
                                                     wattroff(inventory_bar_win, A_REVERSE);
                                                 }
                                                 wrefresh(inventory_bar_win);
-                                                ch = wgetch(inventory_bar_win);
+                                                ch = music_getch(inventory_bar_win);
         
                                                 switch (ch) {
                                                     case KEY_UP:
@@ -6718,10 +6593,10 @@ void inventory_bar_menu() {
                                                                     wattron(inventory_bar_win, A_REVERSE);
                                                                 }
                                                                 if(i == 0){
-                                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                                                 }
                                                                 else if(i == 1){
-                                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                                                 }
                                                                 wattroff(inventory_bar_win, A_REVERSE);
                                                             }
@@ -6777,7 +6652,8 @@ void inventory_bar_menu() {
                                                         wattron(inventory_bar_win, COLOR_PAIR(19));
                                                         tab_check = 1;
                                                         break;
-                                                    case '\t':
+                                                    case 27:
+            case '\t':
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                       ");
                                                         tab_check = 1;
@@ -6792,7 +6668,7 @@ void inventory_bar_menu() {
                                             while (tab_check != 1) {
                                                 mouse_save.x = mouse_event.x;
                                                 mouse_save.y = mouse_event.y;
-                                                getmouse(&mouse_event);
+                                                if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -6805,18 +6681,18 @@ void inventory_bar_menu() {
                                                         wattron(inventory_bar_win, A_REVERSE);
                                                     }
                                                     if(i == 0){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                     }
                                                     else if(i == 1){
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                     }
                                                     else if(i == 2){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                     }
                                                     wattroff(inventory_bar_win, A_REVERSE);
                                                 }
                                                 wrefresh(inventory_bar_win);
-                                                ch = wgetch(inventory_bar_win);
+                                                ch = music_getch(inventory_bar_win);
         
                                                 switch (ch) {
                                                     case KEY_UP:
@@ -6832,13 +6708,13 @@ void inventory_bar_menu() {
                                                                 selected_item = i;
                                                             }
                                                             if(i == 0){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                             }
                                                             else if(i == 1){
                                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                             }
                                                             else if(i == 2){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                             }
                                                             wattroff(inventory_bar_win, A_REVERSE);
                                                         }
@@ -6847,13 +6723,13 @@ void inventory_bar_menu() {
                                                                 wattron(inventory_bar_win, A_REVERSE);
                                                             }
                                                             if(i == 0){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                             }
                                                             else if(i == 1){
                                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                             }
                                                             else if(i == 2){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                             }
                                                             wattroff(inventory_bar_win, A_REVERSE);
                                                         }
@@ -6895,7 +6771,8 @@ void inventory_bar_menu() {
                                                         wattroff(inventory_bar_win, COLOR_PAIR(3));
                                                         wattron(inventory_bar_win, COLOR_PAIR(19));
                                                         break;
-                                                    case '\t':
+                                                    case 27:
+            case '\t':
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                           ");
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
@@ -6917,7 +6794,7 @@ void inventory_bar_menu() {
                                             wattron(inventory_bar_win, A_REVERSE);
                                         }
                                         if(i == 0){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "%s🪓 ", weapon_types[i]);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, UI_TEXT("%s🪓 ","%s♠ "), weapon_types[i]);
                                         }
                                         else if(i == 1){
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1 + i * 29, "%s➳ ", weapon_types[i]);
@@ -6934,7 +6811,7 @@ void inventory_bar_menu() {
                                         while (tab_check != 1) {
                                             mouse_save.x = mouse_event.x;
                                             mouse_save.y = mouse_event.y;
-                                            getmouse(&mouse_event);
+                                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -6947,15 +6824,15 @@ void inventory_bar_menu() {
                                                     wattron(inventory_bar_win, A_REVERSE);
                                                 }
                                                 if(i == 0){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                                 }
                                                 else if(i == 1){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                                 }
                                                 wattroff(inventory_bar_win, A_REVERSE);
                                             }
                                             wrefresh(inventory_bar_win);
-                                            ch = wgetch(inventory_bar_win);
+                                            ch = music_getch(inventory_bar_win);
     
                                             switch (ch) {
                                                 case KEY_UP:
@@ -6979,10 +6856,10 @@ void inventory_bar_menu() {
                                                                 wattron(inventory_bar_win, A_REVERSE);
                                                             }
                                                             if(i == 0){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                                             }
                                                             else if(i == 1){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                                             }
                                                             wattroff(inventory_bar_win, A_REVERSE);
                                                         }
@@ -7038,7 +6915,8 @@ void inventory_bar_menu() {
                                                     wattron(inventory_bar_win, COLOR_PAIR(19));
                                                     tab_check = 1;
                                                     break;
-                                                case '\t':
+                                                case 27:
+            case '\t':
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                       ");
                                                     tab_check = 1;
@@ -7053,7 +6931,7 @@ void inventory_bar_menu() {
                                         while (tab_check != 1) {
                                             mouse_save.x = mouse_event.x;
                                             mouse_save.y = mouse_event.y;
-                                            getmouse(&mouse_event);
+                                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -7066,18 +6944,18 @@ void inventory_bar_menu() {
                                                     wattron(inventory_bar_win, A_REVERSE);
                                                 }
                                                 if(i == 0){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                 }
                                                 else if(i == 1){
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                 }
                                                 else if(i == 2){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                 }
                                                 wattroff(inventory_bar_win, A_REVERSE);
                                             }
                                             wrefresh(inventory_bar_win);
-                                            ch = wgetch(inventory_bar_win);
+                                            ch = music_getch(inventory_bar_win);
     
                                             switch (ch) {
                                                 case KEY_UP:
@@ -7093,13 +6971,13 @@ void inventory_bar_menu() {
                                                             selected_item = i;
                                                         }
                                                         if(i == 0){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 1){
                                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 2){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         wattroff(inventory_bar_win, A_REVERSE);
                                                     }
@@ -7108,13 +6986,13 @@ void inventory_bar_menu() {
                                                             wattron(inventory_bar_win, A_REVERSE);
                                                         }
                                                         if(i == 0){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 1){
                                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 2){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         wattroff(inventory_bar_win, A_REVERSE);
                                                     }
@@ -7156,7 +7034,8 @@ void inventory_bar_menu() {
                                                     wattroff(inventory_bar_win, COLOR_PAIR(3));
                                                     wattron(inventory_bar_win, COLOR_PAIR(19));
                                                     break;
-                                                case '\t':
+                                                case 27:
+            case '\t':
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                           ");
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
@@ -7166,7 +7045,8 @@ void inventory_bar_menu() {
                                         }
                                     }
                                     break;
-                                case '\t':
+                                case 27:
+            case '\t':
                                     tab_check1 = 1;
                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
                                     break;
@@ -7181,7 +7061,7 @@ void inventory_bar_menu() {
                         while(tab_check != 1){
                             mouse_save.x = mouse_event.x;
                             mouse_save.y = mouse_event.y;
-                            getmouse(&mouse_event);
+                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                             wattron(inventory_bar_win, COLOR_PAIR(17));
                             for(int i = 0; i < items_size; i++){
                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "                            ");
@@ -7189,18 +7069,18 @@ void inventory_bar_menu() {
                                     wattron(inventory_bar_win, A_REVERSE);
                                 }
                                 if(i == 0){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍾 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍾 %d","● %s✦ %d"), game->player->spells[i].name, game->player->spells[i].count);
                                 }
                                 if(i == 1){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍷 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍷 %d","● %s◆ %d"), game->player->spells[i].name, game->player->spells[i].count);
                                 }
                                 if(i == 2){
-                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍸 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍸 %d","● %s✧ %d"), game->player->spells[i].name, game->player->spells[i].count);
                                 }
                                 wattroff(inventory_bar_win, A_REVERSE);
                             }
                             wrefresh(inventory_bar_win);
-                            ch = wgetch(inventory_bar_win);
+                            ch = music_getch(inventory_bar_win);
                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + items_size, 2, "                                    ");
                             switch (ch) {
                                 case KEY_UP:
@@ -7221,13 +7101,13 @@ void inventory_bar_menu() {
                                                 wattron(inventory_bar_win, A_REVERSE);
                                             }
                                             if(i == 0){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍾 %d   ", game->player->spells[i].name, game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍾 %d   ","● %s✦ %d   "), game->player->spells[i].name, game->player->spells[i].count);
                                             }
                                             if(i == 1){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍷 %d   ", game->player->spells[i].name, game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍷 %d   ","● %s◆ %d   "), game->player->spells[i].name, game->player->spells[i].count);
                                             }
                                             if(i == 2){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍸 %d   ", game->player->spells[i].name, game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍸 %d   ","● %s✧ %d   "), game->player->spells[i].name, game->player->spells[i].count);
                                             }
                                             wattroff(inventory_bar_win, A_REVERSE);
                                         }
@@ -7261,13 +7141,13 @@ void inventory_bar_menu() {
                                             k = 9;
                                             for(int i = 0; i < 3; i++){
                                                 if(i == 0){
-                                                    mvwprintw(inventory_bar_win, 6, k, "Speed %d🍾", game->player->spells[i].count);
+                                                    mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Speed %d🍾","Speed %d✦"), game->player->spells[i].count);
                                                 }
                                                 else if(i == 1){
-                                                    mvwprintw(inventory_bar_win, 6, k, "Power %d🍷", game->player->spells[i].count);
+                                                    mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Power %d🍷","Power %d◆"), game->player->spells[i].count);
                                                 }
                                                 else if(i == 2){
-                                                    mvwprintw(inventory_bar_win, 6, k, "Healing %d🍸", game->player->spells[i].count);
+                                                    mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Healing %d🍸","Healing %d✧"), game->player->spells[i].count);
                                                 }
                                                 int a = 0;
                                                 if(game->player->spells[i].count >= 10){
@@ -7311,13 +7191,13 @@ void inventory_bar_menu() {
                                         k = 9;
                                         for(int i = 0; i < 3; i++){
                                             if(i == 0){
-                                                mvwprintw(inventory_bar_win, 6, k, "Speed %d🍾", game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Speed %d🍾","Speed %d✦"), game->player->spells[i].count);
                                             }
                                             else if(i == 1){
-                                                mvwprintw(inventory_bar_win, 6, k, "Power %d🍷", game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Power %d🍷","Power %d◆"), game->player->spells[i].count);
                                             }
                                             else if(i == 2){
-                                                mvwprintw(inventory_bar_win, 6, k, "Healing %d🍸", game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Healing %d🍸","Healing %d✧"), game->player->spells[i].count);
                                             }
                                             int a = 0;
                                             if(game->player->spells[i].count >= 10){
@@ -7329,7 +7209,8 @@ void inventory_bar_menu() {
                                         wattron(inventory_bar_win, COLOR_PAIR(17));
                                         break;
                                     }
-                                case '\t':
+                                case 27:
+            case '\t':
                                     tab_check = 1;
                                     break;
                             }
@@ -7344,7 +7225,7 @@ void inventory_bar_menu() {
                         while(tab_check != 1){
                             mouse_save.x = mouse_event.x;
                             mouse_save.y = mouse_event.y;
-                            getmouse(&mouse_event);
+                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                             mvwprintw(inventory_bar_win, inventory_size + options_size + 4, 1, "You have %d broken Ancientkeys:  ", game->player->brokenAcientKey);
                             wattron(inventory_bar_win, COLOR_PAIR(12));
                             for(int i = 0; i < 1; i++){
@@ -7355,7 +7236,7 @@ void inventory_bar_menu() {
                                 wattroff(inventory_bar_win, A_REVERSE);
                             }
                             wrefresh(inventory_bar_win);
-                            ch = wgetch(inventory_bar_win);
+                            ch = music_getch(inventory_bar_win);
                             switch (ch) {
                                 case KEY_UP:
                                     selected_item = (selected_item - 1 + items_size) % items_size;
@@ -7430,7 +7311,8 @@ void inventory_bar_menu() {
                                     mvwprintw(inventory_bar_win, 8, 1, "Broken Ancient Key: %d", game->player->brokenAcientKey);
                                     wattroff(inventory_bar_win, COLOR_PAIR(3));
                                     break;
-                                case '\t':
+                                case 27:
+            case '\t':
                                     tab_check = 1;
                                     break;
                             }
@@ -7455,28 +7337,28 @@ void inventory_bar_menu() {
                     while(tab_check != 1){
                         mouse_save.x = mouse_event.x;
                         mouse_save.y = mouse_event.y;
-                        getmouse(&mouse_event);
+                        if (ch == KEY_MOUSE) getmouse(&mouse_event);
                         wattron(inventory_bar_win, COLOR_PAIR(7));
                         for(int i = 0; i < 4; i++){
                             if (i == selected_item) {
                                 wattron(inventory_bar_win, A_REVERSE);
                             }
                             if(i == 0){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Special Food %d🍓 ", game->player->specialfoods[i].count);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Special Food %d🍓 ","● Special Food %d♣ "), game->player->specialfoods[i].count);
                             }
                             if(i == 1){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Power Food %d🍘 ", game->player->specialfoods[i].count);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Power Food %d🍘 ","● Power Food %d♧ "), game->player->specialfoods[i].count);
                             }
                             if(i == 2){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Speed Food %d🍟 ", game->player->specialfoods[i].count);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Speed Food %d🍟 ","● Speed Food %d♠ "), game->player->specialfoods[i].count);
                             }
                             if(i == 3){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Enchant spell with Rotten Food %d☣💱 ", game->player->specialfoods[i].count);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Enchant spell with Rotten Food %d☣💱 ","● Enchant spell with Rotten Food %d☣¤ "), game->player->specialfoods[i].count);
                             }
                             wattroff(inventory_bar_win, A_REVERSE);
                         }
                         wrefresh(inventory_bar_win);
-                        ch = wgetch(inventory_bar_win);
+                        ch = music_getch(inventory_bar_win);
                         switch (ch) {
                             case KEY_UP:
                                 selected_item = (selected_item - 1 + items_size) % items_size;
@@ -7500,16 +7382,16 @@ void inventory_bar_menu() {
                                             wattron(inventory_bar_win, A_REVERSE);
                                         }
                                         if(i == 0){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Special Food %d🍓 ", game->player->specialfoods[i].count);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Special Food %d🍓 ","● Special Food %d♣ "), game->player->specialfoods[i].count);
                                         }
                                         if(i == 1){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Power Food %d🍘 ", game->player->specialfoods[i].count);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Power Food %d🍘 ","● Power Food %d♧ "), game->player->specialfoods[i].count);
                                         }
                                         if(i == 2){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Speed Food %d🍟 ", game->player->specialfoods[i].count);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Speed Food %d🍟 ","● Speed Food %d♠ "), game->player->specialfoods[i].count);
                                         }
                                         if(i == 3){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Enchant spell with Rotten Food %d☣💱 ", game->player->specialfoods[i].count);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Enchant spell with Rotten Food %d☣💱 ","● Enchant spell with Rotten Food %d☣¤ "), game->player->specialfoods[i].count);
                                         }
                                         wattroff(inventory_bar_win, A_REVERSE);
                                     }
@@ -7533,7 +7415,7 @@ void inventory_bar_menu() {
                                                 }
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 food");
                                                 wattron(inventory_bar_win, COLOR_PAIR(3));
-                                                mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                                mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                                 wattroff(inventory_bar_win, COLOR_PAIR(3));
                                             }
                                             else{
@@ -7554,8 +7436,8 @@ void inventory_bar_menu() {
                                             }
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 health      ");
                                             wattron(inventory_bar_win, COLOR_PAIR(3));
-                                            mvwprintw(inventory_bar_win, 1, 1, "%s: %d💗", inventory_items[0], game->player->health);
-                                            mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                            mvwprintw(inventory_bar_win, 1, 1, UI_TEXT("%s: %d💗","%s: %d♥"), inventory_items[0], game->player->health);
+                                            mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                             wattroff(inventory_bar_win, COLOR_PAIR(3));
                                         }
                                     }
@@ -7635,7 +7517,7 @@ void inventory_bar_menu() {
                                             }
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 food");
                                             wattron(inventory_bar_win, COLOR_PAIR(3));
-                                            mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                            mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                             wattroff(inventory_bar_win, COLOR_PAIR(3));
                                         }
                                         else{
@@ -7656,8 +7538,8 @@ void inventory_bar_menu() {
                                         }
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 9, 2, "You gained 20 health");
                                         wattron(inventory_bar_win, COLOR_PAIR(3));
-                                        mvwprintw(inventory_bar_win, 1, 1, "%s: %d💗", inventory_items[0], game->player->health);
-                                        mvwprintw(inventory_bar_win, 2, 1, "%s: %d🍓", inventory_items[1], game->player->foodCount);
+                                        mvwprintw(inventory_bar_win, 1, 1, UI_TEXT("%s: %d💗","%s: %d♥"), inventory_items[0], game->player->health);
+                                        mvwprintw(inventory_bar_win, 2, 1, UI_TEXT("%s: %d🍓","%s: %d♣"), inventory_items[1], game->player->foodCount);
                                         wattroff(inventory_bar_win, COLOR_PAIR(3));
                                     }
                                 }
@@ -7715,7 +7597,8 @@ void inventory_bar_menu() {
                                 }
                             }
                                 break;
-                            case '\t':
+                            case 27:
+            case '\t':
                                 tab_check = 1;
                                 break;
                         }
@@ -7732,7 +7615,7 @@ void inventory_bar_menu() {
                     while (tab_check1 != 1) {
                         mouse_save.x = mouse_event.x;
                         mouse_save.y = mouse_event.y;
-                        getmouse(&mouse_event);
+                        if (ch == KEY_MOUSE) getmouse(&mouse_event);
                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                         mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
                         wattron(inventory_bar_win, COLOR_PAIR(19));
@@ -7741,7 +7624,7 @@ void inventory_bar_menu() {
                                 wattron(inventory_bar_win, A_REVERSE);
                             }
                             if(i == 0){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "%s🪓 ", weapon_types[i]);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, UI_TEXT("%s🪓 ","%s♠ "), weapon_types[i]);
                             }
                             else if(i == 1){
                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1 + i * 29, "%s➳ ", weapon_types[i]);
@@ -7749,7 +7632,7 @@ void inventory_bar_menu() {
                             wattroff(inventory_bar_win, A_REVERSE);
                         }
                         wrefresh(inventory_bar_win);
-                        ch = wgetch(inventory_bar_win);
+                        ch = music_getch(inventory_bar_win);
 
                         switch (ch) {
                             case KEY_RIGHT:
@@ -7770,7 +7653,7 @@ void inventory_bar_menu() {
                                             wattron(inventory_bar_win, A_REVERSE);
                                         }
                                         if(i == 0){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "%s🪓 ", weapon_types[i]);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, UI_TEXT("%s🪓 ","%s♠ "), weapon_types[i]);
                                         }
                                         else if(i == 1){
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1 + i * 29, "%s➳ ", weapon_types[i]);
@@ -7787,7 +7670,7 @@ void inventory_bar_menu() {
                                         while (tab_check != 1) {
                                             mouse_save.x = mouse_event.x;
                                             mouse_save.y = mouse_event.y;
-                                            getmouse(&mouse_event);
+                                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -7800,15 +7683,15 @@ void inventory_bar_menu() {
                                                     wattron(inventory_bar_win, A_REVERSE);
                                                 }
                                                 if(i == 0){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                                 }
                                                 else if(i == 1){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                                 }
                                                 wattroff(inventory_bar_win, A_REVERSE);
                                             }
                                             wrefresh(inventory_bar_win);
-                                            ch = wgetch(inventory_bar_win);
+                                            ch = music_getch(inventory_bar_win);
     
                                             switch (ch) {
                                                 case KEY_UP:
@@ -7832,10 +7715,10 @@ void inventory_bar_menu() {
                                                                 wattron(inventory_bar_win, A_REVERSE);
                                                             }
                                                             if(i == 0){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                                             }
                                                             else if(i == 1){
-                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                                             }
                                                             wattroff(inventory_bar_win, A_REVERSE);
                                                         }
@@ -7891,7 +7774,8 @@ void inventory_bar_menu() {
                                                     wattron(inventory_bar_win, COLOR_PAIR(19));
                                                     tab_check = 1;
                                                     break;
-                                                case '\t':
+                                                case 27:
+            case '\t':
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                       ");
                                                     tab_check = 1;
@@ -7906,7 +7790,7 @@ void inventory_bar_menu() {
                                         while (tab_check != 1) {
                                             mouse_save.x = mouse_event.x;
                                             mouse_save.y = mouse_event.y;
-                                            getmouse(&mouse_event);
+                                            if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -7919,18 +7803,18 @@ void inventory_bar_menu() {
                                                     wattron(inventory_bar_win, A_REVERSE);
                                                 }
                                                 if(i == 0){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                 }
                                                 else if(i == 1){
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                 }
                                                 else if(i == 2){
-                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                    mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                 }
                                                 wattroff(inventory_bar_win, A_REVERSE);
                                             }
                                             wrefresh(inventory_bar_win);
-                                            ch = wgetch(inventory_bar_win);
+                                            ch = music_getch(inventory_bar_win);
     
                                             switch (ch) {
                                                 case KEY_UP:
@@ -7946,13 +7830,13 @@ void inventory_bar_menu() {
                                                             selected_item = i;
                                                         }
                                                         if(i == 0){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 1){
                                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 2){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         wattroff(inventory_bar_win, A_REVERSE);
                                                     }
@@ -7961,13 +7845,13 @@ void inventory_bar_menu() {
                                                             wattron(inventory_bar_win, A_REVERSE);
                                                         }
                                                         if(i == 0){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 1){
                                                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                         }
                                                         else if(i == 2){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                         }
                                                         wattroff(inventory_bar_win, A_REVERSE);
                                                     }
@@ -8009,7 +7893,8 @@ void inventory_bar_menu() {
                                                     wattroff(inventory_bar_win, COLOR_PAIR(3));
                                                     wattron(inventory_bar_win, COLOR_PAIR(19));
                                                     break;
-                                                case '\t':
+                                                case 27:
+            case '\t':
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                           ");
                                                     mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
@@ -8031,7 +7916,7 @@ void inventory_bar_menu() {
                                         wattron(inventory_bar_win, A_REVERSE);
                                     }
                                     if(i == 0){
-                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "%s🪓 ", weapon_types[i]);
+                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, UI_TEXT("%s🪓 ","%s♠ "), weapon_types[i]);
                                     }
                                     else if(i == 1){
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1 + i * 29, "%s➳ ", weapon_types[i]);
@@ -8048,7 +7933,7 @@ void inventory_bar_menu() {
                                     while (tab_check != 1) {
                                         mouse_save.x = mouse_event.x;
                                         mouse_save.y = mouse_event.y;
-                                        getmouse(&mouse_event);
+                                        if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -8061,15 +7946,15 @@ void inventory_bar_menu() {
                                                 wattron(inventory_bar_win, A_REVERSE);
                                             }
                                             if(i == 0){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                             }
                                             else if(i == 1){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                             }
                                             wattroff(inventory_bar_win, A_REVERSE);
                                         }
                                         wrefresh(inventory_bar_win);
-                                        ch = wgetch(inventory_bar_win);
+                                        ch = music_getch(inventory_bar_win);
 
                                         switch (ch) {
                                             case KEY_UP:
@@ -8093,10 +7978,10 @@ void inventory_bar_menu() {
                                                             wattron(inventory_bar_win, A_REVERSE);
                                                         }
                                                         if(i == 0){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Mace⚒ Damage: 5");
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Mace⚒ Damage: 5","● Mace♠ Damage: 5"));
                                                         }
                                                         else if(i == 1){
-                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Sword⚔ Sharpness: %d Damage: %d", game->player->weapons[4].count, game->player->weapons[4].count * 5);
+                                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Sword⚔ Sharpness: %d Damage: %d","● Sword† Sharpness: %d Damage: %d"), game->player->weapons[4].count, game->player->weapons[4].count * 5);
                                                         }
                                                         wattroff(inventory_bar_win, A_REVERSE);
                                                     }
@@ -8152,7 +8037,8 @@ void inventory_bar_menu() {
                                                 wattron(inventory_bar_win, COLOR_PAIR(19));
                                                 tab_check = 1;
                                                 break;
-                                            case '\t':
+                                            case 27:
+            case '\t':
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                       ");
                                                 tab_check = 1;
@@ -8167,7 +8053,7 @@ void inventory_bar_menu() {
                                     while (tab_check != 1) {
                                         mouse_save.x = mouse_event.x;
                                         mouse_save.y = mouse_event.y;
-                                        getmouse(&mouse_event);
+                                        if (ch == KEY_MOUSE) getmouse(&mouse_event);
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                            ");
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 1, "                                            ");
                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 1, "                                            ");
@@ -8180,18 +8066,18 @@ void inventory_bar_menu() {
                                                 wattron(inventory_bar_win, A_REVERSE);
                                             }
                                             if(i == 0){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                             }
                                             else if(i == 1){
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                             }
                                             else if(i == 2){
-                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                             }
                                             wattroff(inventory_bar_win, A_REVERSE);
                                         }
                                         wrefresh(inventory_bar_win);
-                                        ch = wgetch(inventory_bar_win);
+                                        ch = music_getch(inventory_bar_win);
 
                                         switch (ch) {
                                             case KEY_UP:
@@ -8207,13 +8093,13 @@ void inventory_bar_menu() {
                                                         selected_item = i;
                                                     }
                                                     if(i == 0){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                     }
                                                     else if(i == 1){
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                     }
                                                     else if(i == 2){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                     }
                                                     wattroff(inventory_bar_win, A_REVERSE);
                                                 }
@@ -8222,13 +8108,13 @@ void inventory_bar_menu() {
                                                         wattron(inventory_bar_win, A_REVERSE);
                                                     }
                                                     if(i == 0){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Dagger🗡 Damage: 12 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Dagger🗡 Damage: 12 Range: 5 Count: %d","● Dagger† Damage: 12 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                     }
                                                     else if(i == 1){
                                                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● MagicWand⚚ Damage: 15 Range: 10 Count: %d", game->player->weapons[i + 1].count);
                                                     }
                                                     else if(i == 2){
-                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● Bow🏹 Damage: 5 Range: 5 Count: %d", game->player->weapons[i + 1].count);
+                                                        mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● Bow🏹 Damage: 5 Range: 5 Count: %d","● Bow➳ Damage: 5 Range: 5 Count: %d"), game->player->weapons[i + 1].count);
                                                     }
                                                     wattroff(inventory_bar_win, A_REVERSE);
                                                 }
@@ -8270,7 +8156,8 @@ void inventory_bar_menu() {
                                                 wattroff(inventory_bar_win, COLOR_PAIR(3));
                                                 wattron(inventory_bar_win, COLOR_PAIR(19));
                                                 break;
-                                            case '\t':
+                                            case 27:
+            case '\t':
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 5, 1, "                                           ");
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 6, 2, "                                           ");
                                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
@@ -8280,7 +8167,8 @@ void inventory_bar_menu() {
                                     }
                                 }
                                 break;
-                            case '\t':
+                            case 27:
+            case '\t':
                                 tab_check1 = 1;
                                 mvwprintw(inventory_bar_win, inventory_size + options_size + 7, 2, "                                       ");
                                 break;
@@ -8295,7 +8183,7 @@ void inventory_bar_menu() {
                     while(tab_check != 1){
                         mouse_save.x = mouse_event.x;
                         mouse_save.y = mouse_event.y;
-                        getmouse(&mouse_event);
+                        if (ch == KEY_MOUSE) getmouse(&mouse_event);
                         wattron(inventory_bar_win, COLOR_PAIR(17));
                         for(int i = 0; i < items_size; i++){
                             mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "                            ");
@@ -8303,18 +8191,18 @@ void inventory_bar_menu() {
                                 wattron(inventory_bar_win, A_REVERSE);
                             }
                             if(i == 0){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍾 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍾 %d","● %s✦ %d"), game->player->spells[i].name, game->player->spells[i].count);
                             }
                             if(i == 1){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍷 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍷 %d","● %s◆ %d"), game->player->spells[i].name, game->player->spells[i].count);
                             }
                             if(i == 2){
-                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍸 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍸 %d","● %s✧ %d"), game->player->spells[i].name, game->player->spells[i].count);
                             }
                             wattroff(inventory_bar_win, A_REVERSE);
                         }
                         wrefresh(inventory_bar_win);
-                        ch = wgetch(inventory_bar_win);
+                        ch = music_getch(inventory_bar_win);
                         mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + items_size, 2, "                                    ");
                         switch (ch) {
                             case KEY_UP:
@@ -8335,13 +8223,13 @@ void inventory_bar_menu() {
                                             wattron(inventory_bar_win, A_REVERSE);
                                         }
                                         if(i == 0){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍾 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍾 %d","● %s✦ %d"), game->player->spells[i].name, game->player->spells[i].count);
                                         }
                                         if(i == 1){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍷 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍷 %d","● %s◆ %d"), game->player->spells[i].name, game->player->spells[i].count);
                                         }
                                         if(i == 2){
-                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, "● %s🍸 %d", game->player->spells[i].name, game->player->spells[i].count);
+                                            mvwprintw(inventory_bar_win, inventory_size + options_size + 5 + i, 2, UI_TEXT("● %s🍸 %d","● %s✧ %d"), game->player->spells[i].name, game->player->spells[i].count);
                                         }
                                         wattroff(inventory_bar_win, A_REVERSE);
                                     }
@@ -8376,13 +8264,13 @@ void inventory_bar_menu() {
                                         mvwprintw(inventory_bar_win, 6, 9, "                             ");
                                         for(int i = 0; i < 3; i++){
                                             if(i == 0){
-                                                mvwprintw(inventory_bar_win, 6, k, "Speed %d🍾", game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Speed %d🍾","Speed %d✦"), game->player->spells[i].count);
                                             }
                                             else if(i == 1){
-                                                mvwprintw(inventory_bar_win, 6, k, "Power %d🍷", game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Power %d🍷","Power %d◆"), game->player->spells[i].count);
                                             }
                                             else if(i == 2){
-                                                mvwprintw(inventory_bar_win, 6, k, "Healing %d🍸", game->player->spells[i].count);
+                                                mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Healing %d🍸","Healing %d✧"), game->player->spells[i].count);
                                             }
                                             int a = 0;
                                             if(game->player->spells[i].count >= 10){
@@ -8427,13 +8315,13 @@ void inventory_bar_menu() {
                                     mvwprintw(inventory_bar_win, 6, 9, "                             ");
                                     for(int i = 0; i < 3; i++){
                                         if(i == 0){
-                                            mvwprintw(inventory_bar_win, 6, k, "Speed %d🍾", game->player->spells[i].count);
+                                            mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Speed %d🍾","Speed %d✦"), game->player->spells[i].count);
                                         }
                                         else if(i == 1){
-                                            mvwprintw(inventory_bar_win, 6, k, "Power %d🍷", game->player->spells[i].count);
+                                            mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Power %d🍷","Power %d◆"), game->player->spells[i].count);
                                         }
                                         else if(i == 2){
-                                            mvwprintw(inventory_bar_win, 6, k, "Healing %d🍸", game->player->spells[i].count);
+                                            mvwprintw(inventory_bar_win, 6, k, UI_TEXT("Healing %d🍸","Healing %d✧"), game->player->spells[i].count);
                                         }
                                         int a = 0;
                                         if(game->player->spells[i].count >= 10){
@@ -8445,7 +8333,8 @@ void inventory_bar_menu() {
                                     wattron(inventory_bar_win, COLOR_PAIR(17));
                                     break;
                                 }
-                            case '\t':
+                            case 27:
+            case '\t':
                                 tab_check = 1;
                                 break;
                         }
@@ -8460,7 +8349,7 @@ void inventory_bar_menu() {
                     while(tab_check != 1){
                         mouse_save.x = mouse_event.x;
                         mouse_save.y = mouse_event.y;
-                        getmouse(&mouse_event);
+                        if (ch == KEY_MOUSE) getmouse(&mouse_event);
                         mvwprintw(inventory_bar_win, inventory_size + options_size + 4, 1, "You have %d broken Ancientkeys:  ", game->player->brokenAcientKey);
                         wattron(inventory_bar_win, COLOR_PAIR(12));
                         for(int i = 0; i < 1; i++){
@@ -8471,7 +8360,7 @@ void inventory_bar_menu() {
                             wattroff(inventory_bar_win, A_REVERSE);
                         }
                         wrefresh(inventory_bar_win);
-                        ch = wgetch(inventory_bar_win);
+                        ch = music_getch(inventory_bar_win);
                         switch (ch) {
                             case KEY_UP:
                                 selected_item = (selected_item - 1 + items_size) % items_size;
@@ -8546,7 +8435,8 @@ void inventory_bar_menu() {
                                 mvwprintw(inventory_bar_win, 8, 1, "Broken Ancient Key: %d", game->player->brokenAcientKey);
                                 wattroff(inventory_bar_win, COLOR_PAIR(3));
                                 break;
-                            case '\t':
+                            case 27:
+            case '\t':
                                 tab_check = 1;
                                 break;
                         }
@@ -8558,7 +8448,7 @@ void inventory_bar_menu() {
                 // mvwprintw(inventory_bar_win, inventory_size + options_size + 3, 1, " [Sample Choice 1]");
                 // mvwprintw(inventory_bar_win, inventory_size + options_size + 4, 1, " [Sample Choice 2]");
                 wrefresh(inventory_bar_win);
-                // wgetch(inventory_bar_win);
+                // music_getch(inventory_bar_win);
                 break;
         }
     }
@@ -8578,6 +8468,35 @@ void x_print(WINDOW *game_win, int x, int y){
         wattroff(game_win, COLOR_PAIR(10));
     }
 }
+static void controls_help(WINDOW *game_win) {
+    int h,w; getmaxyx(game_win,h,w);
+    WINDOW *help=newwin(23,76,(h-23)/2,(w-76)/2);
+    if (!help) return;
+    ui_frame(help,"FIELD GUIDE");
+    const char *lines[]={"MOVEMENT & COMBAT", "WASD / arrows    Move; Q / Z / C / Page Up move diagonally",
+        "Ranged: 1) SPACE to aim  2) Arrow / WASD to FIRE. Esc cancels.",
+        "E / left click  Repeat shot / shoot toward mouse (8-way keys too)",
+        "Tab             Inventory, equipment, food and spells",
+        "Enter / < / >   Use the staircase under your feet",
+        "Esc             Pause, change character / colour, save and quit", "",
+        "THE DUNGEON", "@ You    D/F/G/S/U Enemies    ^ Trap    ≡ Stairs    ¤ Gold",
+        "♣ Food   ◇ Shield   † Blade   ➳ Arrow   ✦ Spell   Δ Ancient key",
+        "Cyan passages connect rooms. Search walls for hidden entrances.",
+        "Green sanctuary: recover health. Cyan forge: recover shields.",
+        "Some rooms restrict combat. Darkness hides what lies ahead.",
+        "WAND: arrows shoot (1 charge); WASD rides the spell (2).",
+        "Timmy teaches new discoveries in the lower-right corner.",
+        "Guest runs are temporary; create a hero to save your journey.", "", "Press any key to return"};
+    for(int i=0;i<19;i++) {
+        wattron(help,COLOR_PAIR(i==0||i==8?12:10));mvwaddstr(help,i+2,3,lines[i]);
+        wattroff(help,COLOR_PAIR(i==0||i==8?12:10));
+    }
+    wrefresh(help);music_getch(help);delwin(help);touchwin(game_win);wrefresh(game_win);
+}
+int mouse_attack_event(const MEVENT *event) {
+    return event && event->x>=0 && event->x<MAP_COLS && event->y>=0 && event->y<MAP_ROWS
+        && (event->bstate & (BUTTON1_PRESSED|BUTTON1_CLICKED));
+}
 void player_move(WINDOW *game_win, time_t start_time){
     time(&move_time);
     time(&move_time_2);
@@ -8587,12 +8506,14 @@ void player_move(WINDOW *game_win, time_t start_time){
     count_move = 1;
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width * 3 / 4 - BORDER_PADDING;
     int end_y = map_height * 3 / 4 - BORDER_PADDING + 5;
-    game->map_height = map_height;
-    game->map_width = map_width;
+    game->map_height = map_height - 1;
+    game->map_width = map_width - 1;
     poisonous_food_check = 0;
     int window_check = 0;
     direction = 'w';
@@ -8613,16 +8534,7 @@ void player_move(WINDOW *game_win, time_t start_time){
         mvwprintw(game_win, 2, 81, "│                                                                           │");
         mvwprintw(game_win, 3, 81, "│                                                                           │");
         mvwprintw(game_win, 4, 81, "└───────────────────────────────────────────────────────────────────────────┘");
-        mvwprintw(game_win, map_height - 11, 4, "┌───────Bar─────────────────────────────────────────────────────────────────┐");
-        mvwprintw(game_win, map_height - 10, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 9, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 8, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 7, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 6, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 5, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 4, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 3, 4, "│                                                                           │");
-        mvwprintw(game_win, map_height - 2, 4, "└───────────────────────────────────────────────────────────────────────────┘");
+        draw_status_hud(game_win);
         mvwhline(game_win, start_y - 1, start_x - 1, ACS_HLINE, map_width - 11);
         mvwhline(game_win, end_y, start_x - 1, ACS_HLINE, map_width - 11);
         mvwprintw(game_win, start_y - 1, start_x - 2, "╭");
@@ -8652,12 +8564,12 @@ void player_move(WINDOW *game_win, time_t start_time){
         if(game->currentLevel == 0){
             wattron(game_win, COLOR_PAIR(color_pair_num));
             mvwprintw(game_win, map_height - 11, map_width - 77, "╭──────────────────────────────────────────────────╮");
-            mvwprintw(game_win, map_height - 10, map_width - 77, "│ Hi, welcome to AID Rouge Dungeon🎆🎇             │");
+            mvwprintw(game_win, map_height - 10, map_width - 77, UI_TEXT("│ Hi, welcome to AID Rouge Dungeon🎆🎇             │","│ Hi, welcome to AID Rouge Dungeon✦✧             │"));
             mvwprintw(game_win, map_height - 9, map_width - 77, "│ My name is Timmy and I'm Arad's best friend :D   │");
             mvwprintw(game_win, map_height - 8, map_width - 77, "│ I'm your guide through this adventurous journey. │");
             mvwprintw(game_win, map_height - 7, map_width - 77, "│ And I'll entertain you with my quotes =)         │");
             mvwprintw(game_win, map_height - 6, map_width - 77, "│ Important messages are show with your color!     │");
-            mvwprintw(game_win, map_height - 5, map_width - 77, "│ Hope you enjoy this game and also survive it😃  _⧹");
+            mvwprintw(game_win, map_height - 5, map_width - 77, UI_TEXT("│ Hope you enjoy this game and also survive it😃  _⧹","│ Hope you enjoy this game and also survive it:)  _⧹"));
             mvwprintw(game_win, map_height - 4, map_width - 77, "╰─────────────────────────────────────────────────┘  ¯");
             wattroff(game_win, COLOR_PAIR(color_pair_num));
         }
@@ -8680,9 +8592,9 @@ void player_move(WINDOW *game_win, time_t start_time){
             mvwprintw(game_win, a + 13, b, "              '------'");
         }
         wattron(game_win, COLOR_PAIR(7));
-        mvwprintw(game_win, 2, 5, "Current level: %d🟢 Completed level: %d✅ Total points: %lldXP", game->currentLevel + 1, game->unlockedLevel + 1, game->player->points);
+        mvwprintw(game_win, 2, 5, UI_TEXT("Current level: %d🟢 Completed level: %d✅ Total points: %lldXP","Floor %d   |   Deepest %d   |   XP %lld"), game->currentLevel + 1, game->unlockedLevel + 1, game->player->points);
         wattroff(game_win, COLOR_PAIR(7));
-        mvwprintw(game_win, 2, 5, "Current level: %d🟢 Completed level: %d✅ Total points: %lld", game->currentLevel + 1, game->unlockedLevel + 1, game->player->points);
+        mvwprintw(game_win, 2, 5, UI_TEXT("Current level: %d🟢 Completed level: %d✅ Total points: %lld","Floor %d   |   Deepest %d   |   XP %lld"), game->currentLevel + 1, game->unlockedLevel + 1, game->player->points);
     }
     while(1){
         {
@@ -8742,7 +8654,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 game->player->points = pointss + play_timee * 5 * difficulty_efficiency + game->player->gold * 10;
             }
             if(strcmp(game->player->name, "guest") && strcmp(which_user, "guest")){
-                save_just_user_info(game->player);
+                if (game->currentLevel != 6 && game->player->can_be_saved) save_user_game(game);
             }
         }
         // wattron(game_win, COLOR_PAIR(3));
@@ -8754,11 +8666,11 @@ void player_move(WINDOW *game_win, time_t start_time){
         else if(game->currentLevel == game->levelCount - 1 || game->currentLevel == 6){
             draw_room(game_win, game->levels[game->currentLevel]->rooms[0], 0);
         }
-        move_click = wgetch(game_win);
+        move_click = music_getch(game_win);
         { // Mouse
             mouse_save.x = mouse_event.x;
             mouse_save.y = mouse_event.y;
-            getmouse(&mouse_event);
+            if (move_click == KEY_MOUSE) getmouse(&mouse_event);
             if(mouse_event.x != 0 && mouse_event.y != 0){
                 side = 0;
                 dx = 0;
@@ -8766,7 +8678,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 if(mouse_event.x > game->player->cord.x){
                     dx = 1;
                 }
-                else if(mouse_event.x < game->player->cord.y){
+                else if(mouse_event.x < game->player->cord.x){
                     dx = -1;
                 }
                 if(mouse_event.y > game->player->cord.y){
@@ -8800,7 +8712,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             in_emoji_check();
             if(in_emoji == 0){
                 wattron(game_win, COLOR_PAIR(color_pair_num));
-                mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", character);
+                draw_player_avatar(game_win,game->player->cord.y,game->player->cord.x);
                 wattroff(game_win, COLOR_PAIR(color_pair_num));
             }
         }
@@ -8810,10 +8722,20 @@ void player_move(WINDOW *game_win, time_t start_time){
         else if(game->currentLevel == game->levelCount - 1 || game->currentLevel == 6){
             draw_room(game_win, game->levels[game->currentLevel]->rooms[0], 0);
         }
+        if (move_click == 'h' || move_click == 'H') { controls_help(game_win); continue; }
+        if (move_click == KEY_RESIZE) {
+            int rows,cols;getmaxyx(stdscr,rows,cols);
+            while(rows<MIN_ROWS || cols<MIN_COLS) {
+                erase();mvprintw(1,1,"Resize Terminal to at least %d x %d; gameplay is paused.",MIN_COLS,MIN_ROWS);refresh();
+                music_getch(stdscr);getmaxyx(stdscr,rows,cols);
+            }
+            wresize(game_win,rows<MAP_ROWS?rows:MAP_ROWS,cols<MAP_COLS?cols:MAP_COLS);
+            print_map(game_win);continue;
+        }
         if(move_click == 'f' || move_click == 'F'){
-            move_click = wgetch(game_win);
+            move_click = music_getch(game_win);
             if(move_click == 'o' || move_click == 'O' || move_click == 10){
-                move_click = wgetch(game_win);
+                move_click = music_getch(game_win);
                 f_check = 1 - f_check;
             }
         }
@@ -8826,7 +8748,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             x_check = 1 - x_check;
         }
         else if(move_click == 'm' || move_click == 'M'){
-            move_click = wgetch(game_win);
+            move_click = music_getch(game_win);
             if(move_click == 'o' || move_click == 'O' || move_click == 10){
                 m_check = 1 - m_check;
                 if(m_check){
@@ -8838,7 +8760,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
         }
         else if(move_click == 't' || move_click == 'T'){
-            move_click = wgetch(game_win);
+            move_click = music_getch(game_win);
             if(move_click == 'o' || move_click == 'O' || move_click == 10){
                 t_check = 1 - t_check;
                 if(m_check){
@@ -8866,7 +8788,7 @@ void player_move(WINDOW *game_win, time_t start_time){
         if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
             wattron(game_win, COLOR_PAIR(3));
         }
-        if(move_click == 27 || (move_click == KEY_MOUSE && mouse_save.x == mouse_event.x && mouse_save.y == mouse_event.y && mouse_event.y == 2 && mouse_event.x >= 159 && mouse_event.x <= 160)){
+        if(move_click == 27 || (move_click == KEY_MOUSE && (mouse_event.bstate & (BUTTON1_PRESSED|BUTTON1_CLICKED)) && mouse_event.y == 2 && mouse_event.x >= 159 && mouse_event.x <= 160)){
             wclear(game_win);
             wrefresh(game_win);
             strcpy(which_pause_menu, " ");
@@ -8875,6 +8797,10 @@ void player_move(WINDOW *game_win, time_t start_time){
                 Mix_HaltMusic();
                 escape_check = 1;
                 game->player->can_be_saved = 1;
+                if(game->currentLevel==6) {
+                    game->currentLevel=level_save;game->player->cord=(Point){x_save,y_save};
+                    game->player->room_num=room_num_save;game->newLevel=0;
+                }
                 return;
             }
             else if(!strcmp(which_pause_menu, " Pause Music ")){
@@ -8885,7 +8811,8 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
             else if(!strcmp(which_pause_menu, " Select Music ")){
                 Mix_PauseMusic();
-                selected_music = display_music_menu();
+                char *chosen_music = display_music_menu();
+                if (chosen_music) selected_music = chosen_music;
                 play_music(selected_music);
             }
             else if(!strcmp(which_pause_menu, " Change Character ")){
@@ -8929,7 +8856,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             clear_room(game_win, game->levels[game->currentLevel]->rooms[window_check - 1], window_check - 1);
             window_check = 0;
         }
-        else if(move_click == '\t'|| (move_click == KEY_MOUSE && mouse_save.x == mouse_event.x && mouse_save.y == mouse_event.y && mouse_event.y == 3 && mouse_event.x >= 159 && mouse_event.x <= 160)){
+        else if(move_click == '\t'|| (move_click == KEY_MOUSE && (mouse_event.bstate & (BUTTON1_PRESSED|BUTTON1_CLICKED)) && mouse_event.y == 3 && mouse_event.x >= 159 && mouse_event.x <= 160)){
             if(!strcmp(selected_music, "./Base_Sounds/silent.wav") && game->currentLevel != game->levelCount - 1){
                 Mix_PlayMusic(weaponpickup_effect, 1);
             }
@@ -8943,7 +8870,7 @@ void player_move(WINDOW *game_win, time_t start_time){
         }
         else if(move_click == KEY_UP || move_click == 'w' || move_click == 'W'){
             move_direction = 'w';
-            if(valid_move_check(game->player->cord.y - 1,game->player->cord.x)){
+            if(player_step_valid(game->player->cord.y - 1,game->player->cord.x)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.y -= 1;
@@ -8987,9 +8914,8 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
             else if(game->whole_map[game->currentLevel][game->player->cord.y - 1][game->player->cord.x].item == 'L'){
                 // last_attemps = game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps;
-                entering_password();
+                enter_door_password(game->player->cord.y-1,game->player->cord.x);
                 printf("\033[?1003h\n");
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps = last_attemps;
                 mvwprintw(game_win, 3, 2, "                                                                      ");
                 if(m_check){
                     print_all_map(game_win);
@@ -9005,7 +8931,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             // if(game->player->Speed_effect > 0){
             //     speed_check = 1;
             // }
-            while((f_check || speed_check) && valid_move_check(game->player->cord.y - 1,game->player->cord.x) && valid_move_check(game->player->cord.y, game->player->cord.x)){
+            while((f_check || speed_check) && player_step_valid(game->player->cord.y - 1,game->player->cord.x) && player_step_valid(game->player->cord.y, game->player->cord.x)){
                 game->player->cord.y -= 1;
                 speed_check = 0;
                 move_or_not = 1;
@@ -9021,7 +8947,7 @@ void player_move(WINDOW *game_win, time_t start_time){
         }
         else if(move_click == KEY_DOWN || move_click == 's' || move_click == 'S'){
             move_direction = 's';
-            if(valid_move_check(game->player->cord.y + 1,game->player->cord.x)){
+            if(player_step_valid(game->player->cord.y + 1,game->player->cord.x)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.y += 1;
@@ -9064,9 +8990,8 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
             else if(game->whole_map[game->currentLevel][game->player->cord.y + 1][game->player->cord.x].item == 'L'){
                 // last_attemps = game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps;
-                entering_password();
+                enter_door_password(game->player->cord.y+1,game->player->cord.x);
                 printf("\033[?1003h\n");
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps = last_attemps;
                 mvwprintw(game_win, 3, 2, "                                                                      ");
                 if(m_check){
                     print_all_map(game_win);
@@ -9082,7 +9007,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             // if(game->player->Speed_effect > 0){
             //     speed_check = 1;
             // }
-            while((f_check || speed_check) && valid_move_check(game->player->cord.y + 1,game->player->cord.x) && valid_move_check(game->player->cord.y, game->player->cord.x)){
+            while((f_check || speed_check) && player_step_valid(game->player->cord.y + 1,game->player->cord.x) && player_step_valid(game->player->cord.y, game->player->cord.x)){
                 game->player->cord.y += 1;
                 speed_check = 0;
                 move_or_not = 1;
@@ -9106,7 +9031,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 game->player->cord.x = game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[0].cord.x;
                 game->player->cord.y = game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[0].cord.y;
             }
-            else if(valid_move_check(game->player->cord.y,game->player->cord.x + 1)){
+            else if(player_step_valid(game->player->cord.y,game->player->cord.x + 1)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.x += 1;
@@ -9150,9 +9075,8 @@ void player_move(WINDOW *game_win, time_t start_time){
             else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x + 1].item == 'L'){
                 // game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps = 1;
                 // last_attemps = game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps;
-                entering_password();
+                enter_door_password(game->player->cord.y,game->player->cord.x+1);
                 printf("\033[?1003h\n");
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps = last_attemps;
                 mvwprintw(game_win, 3, 2, "                                                                      ");
                 if(m_check){
                     print_all_map(game_win);
@@ -9168,7 +9092,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             // if(game->player->Speed_effect > 0){
             //     speed_check = 1;
             // }
-            while((f_check || speed_check) && valid_move_check(game->player->cord.y,game->player->cord.x + 1) && valid_move_check(game->player->cord.y, game->player->cord.x)){
+            while((f_check || speed_check) && player_step_valid(game->player->cord.y,game->player->cord.x + 1) && player_step_valid(game->player->cord.y, game->player->cord.x)){
                 game->player->cord.x += 1;
                 speed_check = 0;
                 if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
@@ -9192,7 +9116,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 game->player->cord.x = game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->doorCount - 1].cord.x;
                 game->player->cord.y = game->levels[game->currentLevel]->rooms[game->player->room_num]->doors[game->levels[game->currentLevel]->rooms[game->player->room_num]->doorCount - 1].cord.y;
             }
-            else if(valid_move_check(game->player->cord.y,game->player->cord.x - 1)){
+            else if(player_step_valid(game->player->cord.y,game->player->cord.x - 1)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.x -= 1;
@@ -9235,9 +9159,8 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
             else if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x - 1].item == 'L'){
                 // last_attemps = game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps;
-                entering_password();
+                enter_door_password(game->player->cord.y,game->player->cord.x-1);
                 printf("\033[?1003h\n");
-                game->levels[game->currentLevel]->rooms[game->player->room_num]->lock_attemps = last_attemps;
                 mvwprintw(game_win, 3, 2, "                                                                      ");
                 if(m_check){
                     print_all_map(game_win);
@@ -9253,7 +9176,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             // if(game->player->Speed_effect > 0){
             //     speed_check = 1;
             // }
-            while((f_check || speed_check) && valid_move_check(game->player->cord.y,game->player->cord.x - 1) && valid_move_check(game->player->cord.y, game->player->cord.x)){
+            while((f_check || speed_check) && player_step_valid(game->player->cord.y,game->player->cord.x - 1) && player_step_valid(game->player->cord.y, game->player->cord.x)){
                 game->player->cord.x -= 1;
                 speed_check = 0;
                 if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
@@ -9267,7 +9190,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
         }
         else if(move_click == KEY_HOME || move_click == 'q' || move_click == 'Q'){
-            if(valid_move_check(game->player->cord.y - 1,game->player->cord.x - 1)){
+            if(player_step_valid(game->player->cord.y - 1,game->player->cord.x - 1)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.x -= 1;
@@ -9276,7 +9199,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 password_disapear++;
                 move_or_not = 1;
             }
-            while(f_check && valid_move_check(game->player->cord.y - 1,game->player->cord.x - 1)){
+            while(f_check && player_step_valid(game->player->cord.y - 1,game->player->cord.x - 1)){
                 game->player->cord.y -= 1;
                 game->player->cord.x -= 1;
                 if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
@@ -9288,7 +9211,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
         }
         else if(move_click == KEY_PPAGE){
-            if(valid_move_check(game->player->cord.y - 1,game->player->cord.x + 1)){
+            if(player_step_valid(game->player->cord.y - 1,game->player->cord.x + 1)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.x += 1;
@@ -9297,7 +9220,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 password_disapear++;
                 move_or_not = 1;
             }
-            while(f_check && valid_move_check(game->player->cord.y - 1,game->player->cord.x + 1)){
+            while(f_check && player_step_valid(game->player->cord.y - 1,game->player->cord.x + 1)){
                 game->player->cord.y -= 1;
                 game->player->cord.x += 1;
                 if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
@@ -9309,7 +9232,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
         }
         else if(move_click == KEY_NPAGE || move_click == 'c' || move_click == 'C'){
-            if(valid_move_check(game->player->cord.y + 1,game->player->cord.x + 1)){
+            if(player_step_valid(game->player->cord.y + 1,game->player->cord.x + 1)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.x += 1;
@@ -9318,7 +9241,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 password_disapear++;
                 move_or_not = 1;
             }
-            while(f_check && valid_move_check(game->player->cord.y + 1,game->player->cord.x + 1)){
+            while(f_check && player_step_valid(game->player->cord.y + 1,game->player->cord.x + 1)){
                 game->player->cord.y += 1;
                 game->player->cord.x += 1;
                 if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
@@ -9330,7 +9253,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             }
         }
         else if(move_click == KEY_END || move_click == 'z' || move_click == 'Z'){
-            if(valid_move_check(game->player->cord.y + 1,game->player->cord.x - 1)){
+            if(player_step_valid(game->player->cord.y + 1,game->player->cord.x - 1)){
                 mvwprintw(game_win, game->player->cord.y, game->player->cord.x, "%lc", game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item);
                 printf_diff_from_map(game_win);
                 game->player->cord.x -= 1;
@@ -9339,7 +9262,7 @@ void player_move(WINDOW *game_win, time_t start_time){
                 password_disapear++;
                 move_or_not = 1;
             }
-            while(f_check && valid_move_check(game->player->cord.y + 1,game->player->cord.x - 1)){
+            while(f_check && player_step_valid(game->player->cord.y + 1,game->player->cord.x - 1)){
                 game->player->cord.y += 1;
                 game->player->cord.x -= 1;
                 if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '#'){
@@ -9356,7 +9279,7 @@ void player_move(WINDOW *game_win, time_t start_time){
         //     }
         // }
         else if((move_click == '>' || move_click == '.' || move_click == 10)
-        && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '>'){
+        && game->currentLevel < game->levelCount - 1 && game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '>'){
             // if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '>'){
                 game->currentLevel++;
                 if(game->unlockedLevel < game->currentLevel){
@@ -9364,41 +9287,45 @@ void player_move(WINDOW *game_win, time_t start_time){
                     unlocked_level = game->unlockedLevel;
                     game->newLevel = 1;
                 }
+                total_rooms = game->levels[game->currentLevel]->roomsCount;
                 current_level = game->currentLevel;
                 back_front = 1;
                 return;
             // }
         }
-        else if(move_click == '<' || move_click == ',' || move_click == 10){
+        else if((move_click == '<' || move_click == ',' || move_click == 10) && game->currentLevel > 0){
             if(game->whole_map[game->currentLevel][game->player->cord.y][game->player->cord.x].item == '<'){
                 game->currentLevel--;
+                total_rooms = game->levels[game->currentLevel]->roomsCount;
                 current_level = game->currentLevel;
                 back_front = -1;
                 return;
             }
         }
         else if(move_click == 'P' || move_click == 'p'){
-            move_click = wgetch(game_win);
-            if(move_click == '>' || move_click == '.' || move_click == 10){
+            move_click = music_getch(game_win);
+            if((move_click == '>' || move_click == '.' || move_click == 10) && game->currentLevel < game->levelCount - 1){
                 game->currentLevel++;
                 if(game->unlockedLevel < game->currentLevel){
                     game->unlockedLevel = game->currentLevel;
                     unlocked_level = game->unlockedLevel;
                     game->newLevel = 1;
                 }
+                total_rooms = game->levels[game->currentLevel]->roomsCount;
                 current_level = game->currentLevel;
                 back_front = 1;
                 return;
             }
-            else if(move_click == '<' || move_click == ','){
+            else if((move_click == '<' || move_click == ',') && game->currentLevel > 0){
                 game->currentLevel--;
+                total_rooms = game->levels[game->currentLevel]->roomsCount;
                 current_level = game->currentLevel;
                 back_front = -1;
                 return;
             }
         }
         else if(move_click == 'i' || move_click == 'I'){
-            move_click = wgetch(game_win);
+            move_click = music_getch(game_win);
             if(move_click == 'o' || move_click == 'O' || move_click == 10){
                 if(game->levels[game->currentLevel]->rooms[game->player->room_num]->enemyLeft > 0){
                     for(int i = 0; i < game->levels[game->currentLevel]->rooms[game->player->room_num]->enemyCount; i++){
@@ -9424,11 +9351,13 @@ void player_move(WINDOW *game_win, time_t start_time){
                 }
                 }
         }
-        else if(move_click == ' ' || move_click == 'e' || move_click == 'E' || (move_click == KEY_MOUSE && mouse_save.x == mouse_event.x && mouse_save.y == mouse_event.y)){
+        else if(move_click == ' ' || move_click == 'e' || move_click == 'E' || (move_click == KEY_MOUSE && mouse_attack_event(&mouse_event))){
             move_or_not = 1;
             attacking(game_win);
+            if(escape_check||run_finished)return;
             count_move++;
         }
+        if(escape_check||run_finished)return;
         after_move(game_win);
         if(is_battle){
             is_battle = 0;
@@ -9523,6 +9452,7 @@ void player_move(WINDOW *game_win, time_t start_time){
             wattroff(game_win, COLOR_PAIR(14));
         }
         messaging(game_win);
+        if(is_last_room)boss_encounter_draw(game_win,game->levels[game->currentLevel]->rooms[0]);
         if(game->player->health <= 0){
             lost_game_screen(start_time);
             escape_check = 1;
@@ -9537,6 +9467,7 @@ void player_move(WINDOW *game_win, time_t start_time){
 }
 void game_play(WINDOW *game_win){
     printf("\033[?1003h\n");
+    while (!escape_check) {
     if(game->currentLevel == game->levelCount - 1){
         if(rand() % 2 == 0){
             effects = Mix_LoadMUS("./Base_Sounds/PiratesoftheCaribbean.mp3");
@@ -9550,6 +9481,7 @@ void game_play(WINDOW *game_win){
         generate_map();
         game->newLevel = 0;
     }
+    total_rooms = game->levels[game->currentLevel]->roomsCount;
     current_level = game->currentLevel;
     unlocked_level = game->unlockedLevel;
     if(after_battle){
@@ -9586,31 +9518,70 @@ void game_play(WINDOW *game_win){
     if(escape_check){
         return;
     }
-    game_play(game_win);
+    }
 }
 void start_game(){
+    boss_encounter_reset();
+    victory_results_reset();
+    run_finished=0;
+    game_session_ready = false;
     // strcpy(which_pause_menu, " Save and Quit ");
     // pause_menu();
+    int screen_rows, screen_cols;
+    getmaxyx(stdscr, screen_rows, screen_cols);
+    if (screen_rows < MIN_ROWS || screen_cols < MIN_COLS) {
+        clear(); mvprintw(2, 2, "Please enlarge Terminal to at least %d columns x %d rows, then try New Game again.", MIN_COLS, MIN_ROWS);
+        mvprintw(4, 2, "Current size: %d x %d. Press any key to return.", screen_cols, screen_rows);
+        refresh(); music_getch(stdscr); return;
+    }
+    release_game();
+    back_front = after_battle = is_battle = is_last_room = escape_check = 0;
+    in_nightmare = in_spell = m_check = x_check = f_check = g_check = t_check = 0;
+    in_reinforce = in_healing = valid_f_check = 0;
+    first_gold = first_spell = first_weapon = first_shield = first_food = first_trap = 0;
+    first_specialfood = first_ancientkey = first_password = first_damage = first_attack = 0;
+    first_enemy_near = first_lock_door = first_stair = 0;
+    count_move = 1;
     time(&start_time);
     time(&save_counter1);
     drag2 = clock();
+    Mix_HaltMusic();
+    if (loosing_effect) Mix_FreeMusic(loosing_effect);
+    if (winning_effect) Mix_FreeMusic(winning_effect);
     { // Sounds
+        if (eating_effect) Mix_FreeMusic(eating_effect);
         eating_effect = Mix_LoadMUS("./Base_Sounds/Eating.mp3");
+        if (walk_effect) Mix_FreeMusic(walk_effect);
         walk_effect = Mix_LoadMUS("./Base_Sounds/Walk.mp3");
+        if (damage_effect) Mix_FreeMusic(damage_effect);
         damage_effect = Mix_LoadMUS("./Base_Sounds/Damage.mp3");
+        if (glass_effect) Mix_FreeMusic(glass_effect);
         glass_effect = Mix_LoadMUS("./Base_Sounds/Glass.mp3");
+        if (magic_effect) Mix_FreeMusic(magic_effect);
         magic_effect = Mix_LoadMUS("./Base_Sounds/Magic.wav");
+        if (magicfood_effect) Mix_FreeMusic(magicfood_effect);
         magicfood_effect = Mix_LoadMUS("./Base_Sounds/MagicFood.mp3");
+        if (weaponpickup_effect) Mix_FreeMusic(weaponpickup_effect);
         weaponpickup_effect = Mix_LoadMUS("./Base_Sounds/WeaponPickup.mp3");
+        if (shieldpickup_effect) Mix_FreeMusic(shieldpickup_effect);
         shieldpickup_effect = Mix_LoadMUS("./Base_Sounds/ShieldPickup.mp3");
+        if (forge_effect) Mix_FreeMusic(forge_effect);
         forge_effect = Mix_LoadMUS("./Base_Sounds/Forge.mp3");
+        if (shieldbreak_effect) Mix_FreeMusic(shieldbreak_effect);
         shieldbreak_effect = Mix_LoadMUS("./Base_Sounds/ShieldBreak.mp3");
+        if (coin_effect) Mix_FreeMusic(coin_effect);
         coin_effect = Mix_LoadMUS("./Base_Sounds/Coin1.mp3");
+        if (black_coin_effect) Mix_FreeMusic(black_coin_effect);
         black_coin_effect = Mix_LoadMUS("./Base_Sounds/Coin2.mp3");
+        if (mace_effect) Mix_FreeMusic(mace_effect);
         mace_effect = Mix_LoadMUS("./Base_Sounds/Mace.mp3");
+        if (dagger_effect) Mix_FreeMusic(dagger_effect);
         dagger_effect = Mix_LoadMUS("./Base_Sounds/Dagger.mp3");
+        if (wand_effect) Mix_FreeMusic(wand_effect);
         wand_effect = Mix_LoadMUS("./Base_Sounds/Wand.mp3");
+        if (arrow_effect) Mix_FreeMusic(arrow_effect);
         arrow_effect = Mix_LoadMUS("./Base_Sounds/Arrow.mp3");
+        if (sword_effect) Mix_FreeMusic(sword_effect);
         sword_effect = Mix_LoadMUS("./Base_Sounds/Sword.mp3");
         int random_music = rand() % 4;
         switch(random_music){
@@ -9643,12 +9614,13 @@ void start_game(){
                 break;
         }
     }
-    player = (Player *)malloc(sizeof(Player));
-    game = (Game *)malloc(sizeof(Game));
-    game->player = (Player *)malloc(sizeof(Player));
+    if (music && strcmp(selected_music,"./Base_Sounds/silent.wav")) Mix_PlayMusic(music, 0);
+    player = NULL;
+    game = calloc(1, sizeof(Game));
+    game->player = calloc(1, sizeof(Player));
     game->player->name = "guest";
     game->levelCount = 3 + rand() % 2;
-    game->levels = (Level **)malloc(7 * sizeof(Level *));
+    game->levels = calloc(MAX_LEVELS, sizeof(Level *));
     game->currentLevel = 0;
     game->unlockedLevel = 0;
     game->newLevel = 1;
@@ -9658,29 +9630,35 @@ void start_game(){
     game->player->Health_effect = 0;
     game->player->Power_effect = 0;
     game->player->can_be_saved = 1;
-    Room rooms[9][9];
-    for (int i = 0; i < 7; i++) // Initializing Game
+    /* Room pointers must remain valid across level transitions. */
+    for (int i = 0; i < 7; i++)
     {
-        game->levels[i] = (Level *)malloc(sizeof(Level));
-        game->levels[i]->rooms = malloc(9 * sizeof(Room*));
+        game->levels[i] = calloc(1, sizeof(Level));
+        game->levels[i]->rooms = calloc(MAX_ROOMS, sizeof(Room *));
+        Room *storage = calloc(MAX_ROOMS, sizeof(Room));
         game->levels[i]->level = i;
         game->levels[i]->key.x = 0;
         game->levels[i]->key.y = 0;
         for(int j = 0; j < 9; j++){
-            game->levels[i]->rooms[j] = malloc(sizeof(Room));
-            game->levels[i]->rooms[j] = (rooms[i] + j);
+            game->levels[i]->rooms[j] = storage + j;
+            // game->levels[i]->rooms[j]->doors = malloc(12 * sizeof(Door));
+            // game->levels[i]->rooms[j]->pillars = malloc(5 * sizeof(Point));
         }
     }
     WINDOW *game_win;
     int map_width, map_height;
     getmaxyx(stdscr, map_height, map_width);
+    if (map_height > MAP_ROWS) map_height = MAP_ROWS;
+    if (map_width > MAP_COLS) map_width = MAP_COLS;
     int start_x = BORDER_PADDING;
     int start_y = BORDER_PADDING;
     int end_x = map_width * 3 / 4 - BORDER_PADDING;
     int end_y = map_height * 3 / 4 - BORDER_PADDING;
-    srand(time(NULL));
+
     start_color();
-    init_pair(1, COLOR_YELLOW, COLOR_BLACK);
+    ui_theme();
+    game->map_height = map_height - 1;
+    game->map_width = map_width - 1;
     game_win = newwin(map_height, map_width, 0, 0);
     { //Jsut a shit
     // if(game->currentLevel != 0){
@@ -9723,17 +9701,17 @@ void start_game(){
         game->player->foodCount = current_user.food;
         game->player->weaponCount = current_user.weaponsCount;
         game->player->spellCount = current_user.spellsCount;
-        game->player->weapons = (Weapon *)malloc(5 * sizeof(Weapon));
+        game->player->weapons = calloc(5, sizeof(Weapon));
         game->player->weapons[0].count = current_user.weaponsCount_each[0]; game->player->weapons[0].type = 'm'; strcpy(game->player->weapons[0].name, "Mace"); game->player->weapons[0].damage = 5;
         game->player->weapons[1].count = current_user.weaponsCount_each[1]; game->player->weapons[1].type = 'd'; strcpy(game->player->weapons[1].name, "Dagger"); game->player->weapons[1].damage = 12;
         game->player->weapons[2].count = current_user.weaponsCount_each[2]; game->player->weapons[2].type = 'w'; strcpy(game->player->weapons[2].name, "MagicWand"); game->player->weapons[2].damage = 15;
         game->player->weapons[3].count = current_user.weaponsCount_each[3]; game->player->weapons[3].type = 'a'; strcpy(game->player->weapons[3].name, "NormalArrow"); game->player->weapons[3].damage = 5;
         game->player->weapons[4].count = current_user.weaponsCount_each[4]; game->player->weapons[4].type = 's'; strcpy(game->player->weapons[4].name, "Sword"); game->player->weapons[4].damage = 10;
-        game->player->spells = (Spell *)malloc(3 * sizeof(Spell));
+        game->player->spells = calloc(3, sizeof(Spell));
         game->player->spells[0].count = current_user.spellsCount_each[0]; game->player->spells[0].type = 's'; strcpy(game->player->spells[0].name, "Speed");
         game->player->spells[1].count = current_user.spellsCount_each[1]; game->player->spells[1].type = 'p'; strcpy(game->player->spells[1].name, "Power");
         game->player->spells[2].count = current_user.spellsCount_each[2]; game->player->spells[2].type = 'h'; strcpy(game->player->spells[2].name, "Healing");
-        game->player->specialfoods = (Food *)malloc(4 * sizeof(Food));
+        game->player->specialfoods = calloc(4, sizeof(Food));
         game->player->specialfoods[0].count = 0; game->player->specialfoods[0].type = 'n';
         game->player->specialfoods[1].count = 0; game->player->specialfoods[1].type = 'p';
         game->player->specialfoods[2].count = 0; game->player->specialfoods[2].type = 's';
@@ -9755,7 +9733,12 @@ void start_game(){
         game->player->games_count = current_user.games_count;
         game->player->play_time = current_user.play_time;
         game->new_game = false;
-        load_user_game();
+        if (!load_user_game()) {
+            delwin(game_win); clear();
+            mvprintw(2,2,"This save is incomplete or uses the old unsafe format. It has been kept unchanged.");
+            mvprintw(4,2,"Start a New Game, or keep the old file for recovery. Press any key.");
+            refresh(); music_getch(stdscr); return;
+        }
     }
     else{
         game->new_game = false;
@@ -9764,17 +9747,17 @@ void start_game(){
         game->player->shield = 0;
         game->player->weaponCount = 0;
         game->player->spellCount = 0;
-        game->player->weapons = (Weapon *)malloc(5 * sizeof(Weapon));
+        game->player->weapons = calloc(5, sizeof(Weapon));
         game->player->weapons[0].count = 1; game->player->weapons[0].type = 'm'; strcpy(game->player->weapons[0].name, "Mace"); game->player->weapons[0].damage = 5;
         game->player->weapons[1].count = 0; game->player->weapons[1].type = 'd'; strcpy(game->player->weapons[1].name, "Dagger"); game->player->weapons[1].damage = 12;
         game->player->weapons[2].count = 0; game->player->weapons[2].type = 'w'; strcpy(game->player->weapons[2].name, "MagicWand"); game->player->weapons[2].damage = 15;
         game->player->weapons[3].count = 0; game->player->weapons[3].type = 'a'; strcpy(game->player->weapons[3].name, "NormalArrow"); game->player->weapons[3].damage = 5;
         game->player->weapons[4].count = 0; game->player->weapons[4].type = 's'; strcpy(game->player->weapons[4].name, "Sword"); game->player->weapons[4].damage = 10;
-        game->player->spells = (Spell *)malloc(3 * sizeof(Spell));
+        game->player->spells = calloc(3, sizeof(Spell));
         game->player->spells[0].count = 0; game->player->spells[0].type = 's'; strcpy(game->player->spells[0].name, "Speed");
         game->player->spells[1].count = 0; game->player->spells[1].type = 'p'; strcpy(game->player->spells[1].name, "Power");
         game->player->spells[2].count = 0; game->player->spells[2].type = 'h'; strcpy(game->player->spells[2].name, "Healing");
-        game->player->specialfoods = (Food *)malloc(4 * sizeof(Food));
+        game->player->specialfoods = calloc(4, sizeof(Food));
         game->player->specialfoods[0].count = 0; game->player->specialfoods[0].type = 'n';
         game->player->specialfoods[1].count = 0; game->player->specialfoods[1].type = 'p';
         game->player->specialfoods[2].count = 0; game->player->specialfoods[2].type = 's';
@@ -9824,16 +9807,22 @@ void start_game(){
     else{
         game->player->play_time = 0;
     }
+    victory_results_start(game->player->gold,play_timee);
     keypad(game_win, TRUE);
     mousemask(ALL_MOUSE_EVENTS| REPORT_MOUSE_POSITION, NULL);
-    timeout(0);
+    timeout(-1);
     printf("\033[?1003h\n");
     mouseinterval(0);
     clear();
+    game_session_ready = true;
     game_play(game_win);
     if(escape_check){
         delwin(game_win);
-        game->player->play_time += difftime(end_time, start_time);
+        if(victory_results_ready()){
+            printf("\033[?1003l\n");return;
+        }
+        time(&end_time);
+        game->player->play_time = play_timee + difftime(end_time, start_time);
         if(game->player->points >= 0){
             game->player->points = pointss + difftime(end_time, start_time) * 5 * difficulty_efficiency + game->player->gold * 10;
         }
@@ -9847,5 +9836,13 @@ void start_game(){
     werase(game_win);
     wrefresh(game_win); 
     delwin(game_win);
-    // getch();
+    // music_getch(stdscr);
 }
+/* Original visual renderer, sharing the repaired game state. */
+#include "game_legacy_visuals.inc"
+
+/* Final boss telegraphs and presentation share the existing weapon/combat model. */
+#include "boss_encounter.inc"
+
+/* Victory reward selection and a frozen end-of-run summary. */
+#include "victory_results.inc"
